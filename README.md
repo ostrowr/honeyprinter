@@ -48,6 +48,19 @@ curl 'http://localhost:8787/__scheduled?cron=*+*+*+*+*'
 This endpoint exists only in Wrangler development mode. It still enforces the
 60-second receipt interval. Local tests never call OpenAI or publish real jobs.
 
+## Browser scene
+
+The printer is a Three.js scene with a constrained paper mesh. Its source is in
+`cloud/client/`; the page and feed controls are in `cloud/public/`. Wrangler builds
+`public/scene.js` automatically for development and CI, so edit the source rather
+than the generated bundle. All browser assets are served locally by the Worker.
+
+Use the history arrows to retract to an older receipt or feed forward to a newer
+one. Drag the paper or click the orange button on the printer to replay a receipt.
+The keyboard-accessible **Feed paper** control does the same thing. Replays only
+animate the webpage; they do not enqueue physical print jobs. Reduced-motion
+preferences and **Pause motion** stop the animation while keeping the feed live.
+
 ## Deploy through CI
 
 The initial empty cloud resources have been provisioned:
@@ -78,8 +91,8 @@ To enable GPT-6 Luna later, add `OPENAI_API_KEY` to Actions secrets and change
 `SUMMARY_MODE` from `mock` to `openai` in `cloud/wrangler.jsonc`. Push through CI.
 The Responses API uses `gpt-6-luna`, no reasoning tokens, a 400-token output cap,
 and a strict receipt schema. Counts cover all events since the last successful
-summary; only eight sanitized examples are sent. Raw source IPs and protocol
-metadata are excluded from model input and the public API. A failed API call does
+summary; only eight sanitized examples are sent. Full source IPs are included in the public API and summary samples; raw protocol
+metadata is excluded from both. A failed API call does
 not advance the event cursor. No API key means no OpenAI calls in mock mode.
 
 ## Storage, delivery and the page
@@ -93,7 +106,7 @@ events while retained in D1. Single-probe requests remain supported. The public 
 seconds; these are independent reads and never consume queue messages. Omitting
 the cursor starts with the latest 100 records. Cursors are monotonic database
 IDs, so equal event timestamps cannot skip rows. Public responses omit raw
-metadata and partially hide IP addresses. Each upload is bounded to 256 KiB and
+protocol metadata and include full source IP addresses. Each upload is bounded to 256 KiB and
 1,000 events. Batching reduces HTTP requests and SQL calls; D1 still stores and
 charges for individual event rows.
 

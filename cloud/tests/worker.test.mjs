@@ -43,11 +43,12 @@ test('authentication, strict validation, bounded bodies and deduplication', asyn
   assert.equal((await mf.dispatchFetch(`${base}/api/events?after=1%20OR%201=1`)).status,400);
 });
 
-test('cursor pagination survives identical times, masks IPs and excludes payload metadata', async () => {
-  for(let i=0;i<105;i++) assert.equal((await send(probe({observed_at_ms:1700000000000}))).status,201);
+test('cursor pagination survives identical times, preserves IPv4/IPv6 addresses and excludes payload metadata', async () => {
+  for(let i=0;i<105;i++) assert.equal((await send(probe({observed_at_ms:1700000000000,source_ip:i===0?'2001:db8:1234:5678:90ab:cdef:1234:5678':'203.0.113.17'}))).status,201);
   let first=await get('/api/events?after=0');
   assert.equal(first.items.length,100); assert.equal(first.has_more,true);
-  assert.equal(first.items[0].source,'203.0.113.×');
+  assert.equal(first.items[0].source,'203.0.113.17');
+  assert.equal(first.items[1].source,'2001:db8:1234:5678:90ab:cdef:1234:5678');
   assert.equal(first.items[0].details,undefined);
   const second=await get(`/api/events?after=${first.cursor}`);
   assert.equal(second.items.length,6); assert.equal(second.has_more,false);
@@ -62,6 +63,8 @@ test('queue failure retains a committed receipt; concurrent ticks never duplicat
   const receipt=JSON.parse(pending.payload);
   assert.equal(receipt.counts.probes,106); assert.equal(receipt.counts.samples.length,8);
   assert.equal(receipt.counts.services[0].count,106);
+  assert.equal(receipt.counts.samples[0].source,'203.0.113.17');
+  assert.equal(receipt.counts.samples[1].source,'2001:db8:1234:5678:90ab:cdef:1234:5678');
   await Promise.all([tick(),tick(),tick()]);
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM receipts').first()).n,1);
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM delivered').first()).n,1);

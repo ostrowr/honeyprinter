@@ -85,8 +85,8 @@ async function ingest(request: Request, env: Env): Promise<Response> {
 
 function publicEvent(row: EventRow) {
   const p = JSON.parse(row.payload) as Probe;
-  // Public visitors get neither raw protocol metadata nor complete source addresses.
-  const source = p.source_ip.includes(':') ? `${p.source_ip.split(':').slice(0, 2).join(':')}:…` : p.source_ip.replace(/\.[^.]+$/, '.×');
+  // Expose the observed source address, while keeping raw protocol metadata private.
+  const source = p.source_ip;
   return {id: row.id, received_at_ms: row.received_at_ms, observed_at_ms: p.observed_at_ms, source,
     service: p.service, destination_port: p.destination_port, tls: p.tls, stage: p.stage, outcome: p.outcome, bytes_in: p.bytes_in};
 }
