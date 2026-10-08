@@ -1,0 +1,3 @@
+INGEST_TOKEN=local-development-token-change-me
+# Only needed with SUMMARY_MODE=openai:
+# OPENAI_API_KEY=

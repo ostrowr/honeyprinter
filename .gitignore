@@ -1,0 +1,13 @@
+/target/
+*.jsonl
+__pycache__/
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+!.env.example
+*.sqlite*
+*.db*
+.DS_Store
+cloud/.test-build/

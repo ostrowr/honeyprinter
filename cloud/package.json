@@ -1,0 +1,20 @@
+{
+  "name": "honeyprinter-cloud",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "check": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs",
+    "migrate:local": "wrangler d1 migrations apply honeyprinter --local",
+    "deploy:ci": "node scripts/deploy.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261008.1",
+    "esbuild": "0.28.1",
+    "miniflare": "5.20261006.0-alpha",
+    "typescript": "^5.9.3",
+    "wrangler": "4.148.0"
+  },
+  "overrides": {"sharp": "^0.35.5"}
+}

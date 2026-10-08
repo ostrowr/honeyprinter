@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Honeyprinter · an internet receipt machine</title>
+  <meta name="description" content="A little honeypot that turns the background noise of the internet into receipts.">
+  <link rel="stylesheet" href="./style.css"><script defer src="./app.js"></script>
+</head>
+<body>
+  <header><a class="wordmark" href="/">robbie ostrow</a><span class="edition">FIELD EXPERIMENT / 001</span></header>
+  <main>
+    <section class="intro">
+      <div class="eyebrow"><span class="dot"></span> LISTENING TO THE INTERNET</div>
+      <h1>Knock, knock.<br>Who's <em>there?</em></h1>
+      <p>A tiny server with a lot of open doors. Every curious connection leaves a trace. Honeyprinter turns that background noise into a receipt, once a minute.</p>
+      <div class="connection"><span id="connection-dot" class="dot"></span><span id="connection" role="status">Connecting to the feed…</span><span id="mode" class="tag">MOCK SUMMARIES</span></div>
+    </section>
+    <div class="workspace">
+      <section class="activity" aria-labelledby="activity-heading">
+        <div class="section-heading"><h2 id="activity-heading">At the door</h2><button id="pause" type="button" aria-pressed="false">Pause feed</button></div>
+        <div class="feed-labels"><span>TIME / SOURCE</span><span>SERVICE</span><span>RESULT</span></div>
+        <div id="events"><div class="empty"><span class="empty-symbol">· · ·</span><h3>Quiet on the wire.</h3><p>New connections will appear here.<br>The feed checks in every five seconds.</p></div></div>
+        <p class="footnote">Latest 100 connections · source addresses partially hidden</p>
+      </section>
+      <aside class="paper-column" aria-labelledby="receipt-heading">
+        <div class="section-heading"><h2 id="receipt-heading">Fresh off the roll</h2><span class="small-label">≤ 1 / MIN</span></div>
+        <article id="receipt" class="receipt"><div class="receipt-brand">HONEYPRINTER</div><div class="receipt-rule"></div><p class="receipt-caption">THE INTERNET WAS HERE</p><div id="receipt-content"><div class="waiting-icon">⌁</div><h3>Waiting for a knock.</h3><p>When someone stops by, their visit becomes part of the next receipt.</p></div><div class="receipt-rule"></div><div class="receipt-bottom">THANK YOU FOR CONNECTING<br>NO PURCHASE NECESSARY</div><div class="barcode" aria-hidden="true"></div></article>
+        <div class="receipt-nav"><button id="older" disabled aria-label="Previous receipt">← Previous</button><span id="receipt-position">No receipts yet</span><button id="newer" disabled aria-label="Next receipt">Next →</button></div>
+      </aside>
+    </div>
+    <section class="about"><div><span class="step">01 / THE BAIT</span><p>Basic decoys speak SSH, HTTP, databases, and more. They greet visitors and log the exchange.</p></div><div><span class="step">02 / THE RECEIPT</span><p>Every active minute becomes one summary. A busy minute gets the same little piece of paper.</p></div><div><span class="step">03 / THE MACHINE</span><p>A Raspberry Pi will pull receipts for a thermal printer. For now, this is the digital paper trail.</p></div></section>
+  </main>
+  <footer><span>HONEYPRINTER — AN INTERNET RECEIPT MACHINE</span><span>Connections are observations, not proof of an attack.</span></footer>
+</body>
+</html>
