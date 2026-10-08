@@ -1,8 +1,8 @@
 mod catalog;
-mod outbox;
 mod protocols;
 mod queue;
 mod session;
+mod upload;
 
 use catalog::Service;
 use clap::Parser;
@@ -58,15 +58,18 @@ struct Args {
     /// Summary interval. At least 60 seconds; empty windows emit nothing.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(60..=86400))]
     summary_secs: u64,
-    /// Deliver each probe to this HTTPS endpoint; token comes from HONEYPRINTER_INGEST_TOKEN.
+    /// Deliver probe batches to this HTTPS endpoint; token comes from HONEYPRINTER_INGEST_TOKEN.
     #[arg(long)]
     ingest_url: Option<String>,
-    /// Durable upload outbox. Retained across restarts; use a persistent disk.
-    #[arg(long, default_value = "honeyprinter-outbox.sqlite")]
-    outbox: PathBuf,
-    /// Maximum retained events, including quarantined events.
-    #[arg(long, default_value_t = 100000, value_parser = clap::value_parser!(u32).range(1..=1000000))]
-    outbox_capacity: u32,
+    /// Maximum waiting probes in memory, in addition to the current batch. Drops when full.
+    #[arg(long, default_value_t = 1024, value_parser = clap::value_parser!(u32).range(1..=65536))]
+    upload_capacity: u32,
+    /// Minimum gap between upload requests. Empty buffers send nothing.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..=60))]
+    upload_interval_secs: u64,
+    /// Maximum probes per upload request (also capped at 256 KiB).
+    #[arg(long, default_value_t = 256, value_parser = clap::value_parser!(u32).range(1..=1000))]
+    upload_batch_size: u32,
 }
 
 #[tokio::main(worker_threads = 2)]
@@ -86,16 +89,14 @@ async fn main() -> io::Result<()> {
     }
     let upload = match &args.ingest_url {
         Some(url) => {
-            outbox::validate_endpoint(url)?;
             let token = std::env::var("HONEYPRINTER_INGEST_TOKEN")
                 .map_err(|_| io::Error::other("set HONEYPRINTER_INGEST_TOKEN to enable uploads"))?;
-            if token.trim().is_empty() {
-                return Err(io::Error::other("ingest token is empty"));
-            }
-            Some((
-                outbox::Outbox::open(&args.outbox, args.outbox_capacity)?,
-                token,
-            ))
+            Some(upload::Uploader::new(
+                url,
+                &token,
+                Duration::from_secs(args.upload_interval_secs),
+                args.upload_batch_size as usize,
+            )?)
         }
         None => None,
     };
@@ -120,27 +121,22 @@ async fn main() -> io::Result<()> {
     let permits = Arc::new(Semaphore::new(args.max_connections as usize));
     let counters = Arc::new(Counters::default());
     let (tx, rx) = mpsc::channel(args.queue_capacity as usize);
-    let (upload_stop, upload_stop_rx) = watch::channel(false);
-    let cloud_outbox = upload.as_ref().map(|(outbox, _)| outbox.clone());
-    let mut uploader = tokio::spawn({
-        let endpoint = args.ingest_url.clone();
-        async move {
-            match upload {
-                Some((outbox, token)) => {
-                    outbox
-                        .upload(endpoint.unwrap(), token, upload_stop_rx)
-                        .await
-                }
-                None => std::future::pending::<io::Result<()>>().await,
-            }
+    let (upload_tx, mut uploader) = match upload {
+        Some(upload) => {
+            let (tx, rx) = mpsc::channel(args.upload_capacity as usize);
+            (
+                Some(tx),
+                Some(tokio::spawn(upload.run(rx, counters.clone()))),
+            )
         }
-    });
+        None => (None, None),
+    };
     let mut consumer = tokio::spawn(queue::run(
         rx,
         counters.clone(),
         args.events.clone(),
         args.summary_secs,
-        cloud_outbox,
+        upload_tx,
     ));
     let (stop_tx, stop_rx) = watch::channel(false);
     let mut tasks = JoinSet::new();
@@ -194,7 +190,7 @@ async fn main() -> io::Result<()> {
     drop(tx);
     tokio::select! {
         signal = shutdown_signal() => signal?,
-        result = &mut uploader => {
+        result = async { uploader.as_mut().expect("uploader enabled").await }, if uploader.is_some() => {
             return result.map_err(io::Error::other)?.and(Err(io::Error::other("uploader stopped unexpectedly")));
         }
         result = &mut consumer => {
@@ -213,11 +209,16 @@ async fn main() -> io::Result<()> {
         result.map_err(io::Error::other)??;
     }
     consumer.await.map_err(io::Error::other)??;
-    let _ = upload_stop.send(true);
-    if args.ingest_url.is_some() {
-        uploader.await.map_err(io::Error::other)??;
-    } else {
-        uploader.abort();
+    if let Some(mut uploader) = uploader {
+        // Best effort: drain when reachable, but never hang shutdown during an outage.
+        match tokio::time::timeout(Duration::from_secs(5), &mut uploader).await {
+            Ok(result) => result.map_err(io::Error::other)??,
+            Err(_) => {
+                eprintln!("upload shutdown deadline reached; discarding unsent in-memory probes");
+                uploader.abort();
+                let _ = uploader.await;
+            }
+        }
     }
     Ok(())
 }

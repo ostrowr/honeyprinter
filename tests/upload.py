@@ -1,78 +1,146 @@
 #!/usr/bin/env python3
-"""Actual sockets + SQLite: retry, restart, quarantine and stable event UUIDs."""
+"""Real sockets: bounded batches, strict pacing, overload drops and no persistence."""
 import http.server
 import json
 import os
 from pathlib import Path
 import signal
 import socket
-import sqlite3
 import subprocess
 import tempfile
 import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
 def wait_for(check, seconds=15):
-    deadline=time.monotonic()+seconds
-    while time.monotonic()<deadline:
-        result=check()
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        result = check()
         if result:
             return result
-        time.sleep(.05)
+        time.sleep(.02)
     raise AssertionError('timed out')
 
+
 class Handler(http.server.BaseHTTPRequestHandler):
-    status=503
-    events=[]
+    status = 201
+    records = []
+    gate = threading.Event()
+
     def do_POST(self):
-        assert self.headers['Authorization']=='Bearer testing'
-        event=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        self.events.append(event)
-        self.send_response(self.status); self.end_headers(); self.wfile.write(b'{}')
-    def log_message(self,*args):
+        assert self.headers['Authorization'] == 'Bearer testing'
+        body = self.rfile.read(int(self.headers['Content-Length']))
+        assert len(body) <= 256 * 1024
+        batch = json.loads(body)
+        assert batch['schema_version'] == 1 and batch['type'] == 'probe_batch'
+        assert 1 <= len(batch['events']) <= 2
+        status = self.status
+        self.records.append((time.monotonic(), status, batch['events']))
+        self.gate.wait(10)
+        if any(p['details'].get('path') == '/slow' for p in batch['events']):
+            time.sleep(1.2)
+        self.send_response(status)
+        self.end_headers()
+        try:
+            self.wfile.write(b'{}')
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def log_message(self, *args):
         pass
 
+
+def has_path(path):
+    return any(p['details'].get('path') == path for _, _, batch in Handler.records for p in batch)
+
+
 with tempfile.TemporaryDirectory() as directory:
-    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
-    threading.Thread(target=server.serve_forever,daemon=True).start()
+    directory = Path(directory)
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     with socket.socket() as s:
-        s.bind(('127.0.0.1',0)); port=s.getsockname()[1]
-    outbox=Path(directory)/'outbox.sqlite'
-    env={**os.environ,'HONEYPRINTER_INGEST_TOKEN':'testing'}
-    args=[str(ROOT/'target/debug/honeyprinter'),'--services',f'http:{port}','--port-offset','0',
-          '--ingest-url',f'http://127.0.0.1:{server.server_port}/honeyprinter/api/probes','--outbox',str(outbox)]
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+    env = {**os.environ, 'HONEYPRINTER_INGEST_TOKEN': 'testing'}
+    log_path, output_path, events_path = (directory / name for name in ('server.log', 'summaries.jsonl', 'events.jsonl'))
+    args = [str(ROOT / 'target/debug/honeyprinter'), '--services', f'http:{port}', '--port-offset', '0',
+            '--ingest-url', f'http://127.0.0.1:{server.server_port}/honeyprinter/api/probes',
+            '--upload-capacity', '3', '--upload-batch-size', '2', '--events', str(events_path)]
+
     def start():
-        log=open(Path(directory)/'server.log','a')
-        process=subprocess.Popen(args,env=env,stdout=subprocess.DEVNULL,stderr=log)
-        log.close()
-        wait_for(lambda:'listening http' in (Path(directory)/'server.log').read_text())
-        time.sleep(.15)
+        with log_path.open('w') as log, output_path.open('w') as output:
+            process = subprocess.Popen(args, cwd=directory, env=env, stdout=output, stderr=log)
+        wait_for(lambda: 'listening http' in log_path.read_text())
         return process
+
     def stop(process):
-        process.send_signal(signal.SIGTERM); assert process.wait(timeout=10)==0
-    def probe():
-        with socket.create_connection(('127.0.0.1',port),timeout=3) as client:
-            client.sendall(b'GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n'); client.recv(2048)
-    def rows():
-        with sqlite3.connect(outbox) as db:
-            return db.execute('SELECT event_id,rejected_status FROM outbox').fetchall()
-    process=start()
+        start = time.monotonic()
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=8) == 0
+        assert time.monotonic() - start < 7, 'outages must not hang shutdown'
+
+    def probe(path):
+        with socket.create_connection(('127.0.0.1', port), timeout=3) as client:
+            client.sendall(f'GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n'.encode())
+            client.recv(2048)
+
+    process = start()
     try:
-        probe(); wait_for(lambda:len(Handler.events)>=2)
-        assert Handler.events[0]['event_id']==Handler.events[1]['event_id']
-        assert len(rows())==1
+        # Hold a request in flight: only three further events fit the upload buffer.
+        probe('/first')
+        wait_for(lambda: len(Handler.records) == 1)
+        for i in range(6):
+            probe(f'/burst-{i}')
+        wait_for(lambda: len(events_path.read_text().splitlines()) == 7)
+        time.sleep(.05)
+        Handler.gate.set()
+        wait_for(lambda: len(Handler.records) == 3)
+        assert [len(batch) for _, _, batch in Handler.records] == [1, 2, 1]
+
+        # Fail a batch, then recover: the failed event is never resent.
+        Handler.status = 503
+        probe('/failed')
+        wait_for(lambda: has_path('/failed'))
+        time.sleep(.1)
+        Handler.status = 201
+        probe('/recovered')
+        wait_for(lambda: has_path('/recovered'))
+
+        # Slow responses must not cause catch-up requests to bunch together.
+        probe('/slow')
+        wait_for(lambda: has_path('/slow'))
+        probe('/after-slow')
+        wait_for(lambda: has_path('/after-slow'))
+        times = [t for t, _, _ in Handler.records]
+        assert all(b - a >= .98 for a, b in zip(times, times[1:])), times
+        ids = [p['event_id'] for _, _, batch in Handler.records for p in batch]
+        assert len(ids) == len(set(ids)), 'failed batches must not retry'
+
+        # Block again and leave pending events when shutting down.
+        Handler.gate.clear()
+        probe('/blocked')
+        wait_for(lambda: has_path('/blocked'))
+        probe('/lost-on-stop')
         stop(process)
-        Handler.status=201
-        process=start(); wait_for(lambda:len(rows())==0)
-        assert len({e['event_id'] for e in Handler.events})==1
-        Handler.status=400
-        probe(); wait_for(lambda:rows() and rows()[0][1]==400)
-        Handler.status=201
-        probe(); wait_for(lambda:len(Handler.events)>=5 and len(rows())==1)
-        assert rows()[0][1]==400, 'bad event remains quarantined, later events upload'
+        summary = json.loads(output_path.read_text().splitlines()[-1])
+        assert summary['upload_dropped'] >= 4, summary
+        assert 'discarding unsent in-memory probes' in log_path.read_text()
+        before_restart = len(Handler.records)
+        Handler.gate.set()
+        process = start()
+        time.sleep(1.2)
+        assert len(Handler.records) == before_restart, 'no old events survive restart'
+        probe('/new-process')
+        wait_for(lambda: has_path('/new-process'))
         stop(process)
+        assert not list(directory.glob('*.sqlite*'))
     finally:
-        if process.poll() is None: process.kill(); process.wait()
+        Handler.gate.set()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
         server.shutdown()
-print('Upload retry, restart recovery, stable UUID and quarantine tests passed')
+
+print('PASS: bounded batches, >=1s request gaps, overflow/failure drops, bounded shutdown and no persistence')

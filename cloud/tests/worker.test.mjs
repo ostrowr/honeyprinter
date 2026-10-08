@@ -34,7 +34,7 @@ test('authentication, strict validation, bounded bodies and deduplication', asyn
   const unauthorized = await mf.dispatchFetch(`${base}/api/probes`, {method:'POST'});
   assert.equal(unauthorized.status,401);
   assert.equal((await send(probe({source_port:-1}))).status,400);
-  assert.equal((await send(probe({details:{secret:'a'.repeat(33000)}}))).status,413);
+  assert.equal((await send(probe({details:{secret:'a'.repeat(262145)}}))).status,413);
   const p=probe();
   assert.equal((await send(p)).status,201);
   assert.equal((await send(p)).status,200);
@@ -103,4 +103,24 @@ test('summary failure releases the lease without advancing or losing events', as
   assert.equal(state.lease_token,null);
   assert.equal((await tick()).status,200);
   assert.equal((await get('/api/receipts')).items.at(-1).counts.probes,1);
+});
+
+test('batch ingestion validates atomically and deduplicates individual UUIDs', async () => {
+  const batch = events => ({schema_version:1,type:'probe_batch',events});
+  const events = Array.from({length:300}, () => probe());
+  const first = await send(batch(events));
+  assert.equal(first.status,201);
+  assert.deepEqual(await first.json(),{accepted:300,duplicates:0});
+  const replay = await send(batch(events));
+  assert.equal(replay.status,200);
+  assert.deepEqual(await replay.json(),{accepted:0,duplicates:300});
+  const same=probe();
+  assert.deepEqual(await (await send(batch([same,same]))).json(),{accepted:1,duplicates:1});
+  const before = await db.prepare('SELECT COUNT(*) AS n FROM events').first();
+  assert.equal((await send(batch([probe(),probe({source_port:-1})]))).status,400);
+  assert.equal((await send(batch([]))).status,400);
+  assert.equal((await send(batch(Array.from({length:1001},()=>({}))))).status,400);
+  assert.deepEqual(await db.prepare('SELECT COUNT(*) AS n FROM events').first(),before);
+  const last = await db.prepare('SELECT payload FROM events ORDER BY id DESC LIMIT 1').first();
+  assert.equal(JSON.parse(last.payload).event_id,same.event_id);
 });

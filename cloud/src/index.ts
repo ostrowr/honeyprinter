@@ -56,22 +56,31 @@ async function ingest(request: Request, env: Env): Promise<Response> {
     const {value, done} = await reader.read();
     if (done) break;
     length += value.length;
-    if (length > 32_768) { await reader.cancel(); return json({error: 'Event too large'}, 413); }
+    if (length > 262_144) { await reader.cancel(); return json({error: 'Upload too large'}, 413); }
     chunks.push(value);
   }
-  let probe: unknown;
-  try { probe = JSON.parse(await new Blob(chunks).text()); } catch { return json({error: 'Invalid JSON'}, 400); }
-  if (!validateProbe(probe)) return json({error: 'Invalid probe schema'}, 400);
+  let body: unknown;
+  try { body = JSON.parse(await new Blob(chunks).text()); } catch { return json({error: 'Invalid JSON'}, 400); }
+  const batch = body as {schema_version?: unknown; type?: unknown; events?: unknown} | null;
+  const isBatch = batch?.schema_version === 1 && batch?.type === 'probe_batch';
+  const events: unknown[] = isBatch && Array.isArray(batch.events) ? batch.events : [body];
+  if (events.length === 0 || events.length > 1000 || !events.every(validateProbe)) return json({error: 'Invalid probe batch'}, 400);
+  const probes = events as Probe[];
   // Only retain the documented schema; discard extra top-level input.
-  const p: Probe = {
+  const cleaned: Probe[] = probes.map(probe => ({
     schema_version: 1, type: 'probe', event_id: probe.event_id, observed_at_ms: probe.observed_at_ms,
     source_ip: probe.source_ip, source_port: probe.source_port, destination_port: probe.destination_port,
     service: probe.service, tls: probe.tls, stage: probe.stage, outcome: probe.outcome,
     duration_ms: probe.duration_ms, bytes_in: probe.bytes_in, bytes_out: probe.bytes_out, details: probe.details,
-  };
-  const result = await env.DB.prepare('INSERT INTO events (event_id, received_at_ms, observed_at_ms, source_ip, service, outcome, payload) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(event_id) DO NOTHING')
-    .bind(p.event_id, Date.now(), p.observed_at_ms, p.source_ip, p.service, p.outcome, JSON.stringify(p)).run();
-  return json({event_id: p.event_id, duplicate: result.meta.changes === 0}, result.meta.changes ? 201 : 200);
+  }));
+  // One atomic statement and two bound parameters regardless of batch size.
+  const result = await env.DB.prepare(`INSERT INTO events (event_id, received_at_ms, observed_at_ms, source_ip, service, outcome, payload)
+    SELECT json_extract(value, '$.event_id'), ?, json_extract(value, '$.observed_at_ms'),
+      json_extract(value, '$.source_ip'), json_extract(value, '$.service'), json_extract(value, '$.outcome'), value
+    FROM json_each(?) WHERE true ON CONFLICT(event_id) DO NOTHING`)
+    .bind(Date.now(), JSON.stringify(cleaned)).run();
+  return json(isBatch ? {accepted: result.meta.changes, duplicates: probes.length - result.meta.changes}
+    : {event_id: probes[0].event_id, duplicate: result.meta.changes === 0}, result.meta.changes ? 201 : 200);
 }
 
 function publicEvent(row: EventRow) {

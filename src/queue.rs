@@ -47,6 +47,7 @@ pub struct Probe {
 pub struct Counters {
     pub queue_dropped: AtomicU64,
     pub connection_rejected: AtomicU64,
+    pub upload_dropped: AtomicU64,
 }
 
 #[derive(Default)]
@@ -76,7 +77,8 @@ impl Window {
     fn take(&mut self, counters: &Counters, start: u64, kind: &str) -> Option<Value> {
         let dropped = counters.queue_dropped.swap(0, Ordering::Relaxed);
         let rejected = counters.connection_rejected.swap(0, Ordering::Relaxed);
-        if self.total == 0 && dropped == 0 && rejected == 0 {
+        let upload_dropped = counters.upload_dropped.swap(0, Ordering::Relaxed);
+        if self.total == 0 && dropped == 0 && rejected == 0 && upload_dropped == 0 {
             return None;
         }
         let result = json!({
@@ -84,6 +86,7 @@ impl Window {
             "probes": self.total, "services": self.services, "outcomes": self.outcomes,
             "distinct_source_ips": self.sources.len(), "distinct_source_ips_is_lower_bound": self.sources_truncated,
             "queue_dropped": dropped, "connections_rejected": rejected, "samples": self.samples,
+            "upload_dropped": upload_dropped,
             "summarizer": "mock", "sample_policy": "first 8 events; counts include every dequeued event"
         });
         *self = Self::default();
@@ -105,13 +108,13 @@ async fn write_json(
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "mock queue output blocked"))?
 }
 
-/// Bounded ingestion, optional durable cloud outbox, and diagnostic mock summaries.
+/// Bounded ingestion, optional in-memory uploads, and diagnostic mock summaries.
 pub async fn run(
     mut rx: mpsc::Receiver<Probe>,
     counters: Arc<Counters>,
     events: Option<PathBuf>,
     seconds: u64,
-    outbox: Option<crate::outbox::Outbox>,
+    uploads: Option<mpsc::Sender<Probe>>,
 ) -> io::Result<()> {
     let mut events: Option<Box<dyn AsyncWrite + Unpin + Send>> = match events {
         Some(path) if path.as_os_str() == "-" => Some(Box::new(tokio::io::stdout())),
@@ -140,11 +143,11 @@ pub async fn run(
             }
             event = rx.recv() => match event {
                 Some(event) => {
-                    if let Some(outbox) = &outbox && !outbox.persist(&event).await? {
-                        counters.queue_dropped.fetch_add(1, Ordering::Relaxed);
-                    }
                     window.add(&event);
                     if let Some(writer) = events.as_mut() { write_json(writer.as_mut(), &event).await?; }
+                    if let Some(uploads) = &uploads && uploads.try_send(event).is_err() {
+                        counters.upload_dropped.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 None => {
                     // Diagnostic only: a consumer must not print this as an extra receipt.

@@ -2,14 +2,13 @@
 name = "honeyprinter"
 version = "0.1.0"
 edition = "2024"
-description = "Tiny protocol decoys with durable probe delivery and receipt summaries"
+description = "Tiny protocol decoys with bounded probe batches and receipt summaries"
 license = "MIT"
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "fs", "sync", "signal", "time"] }

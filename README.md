@@ -4,8 +4,10 @@ A small Rust binary that exposes deliberately shallow TCP protocol decoys and tu
 connections into structured probe events. No real shells, databases, mailboxes,
 forward proxies, or message brokers run behind the ports.
 
-The Rust listener sends each event through a durable SQLite outbox to a TypeScript
-Cloudflare Worker. The Worker stores individual probes in D1, serves a live page
+The Rust listener sends bounded batches to a TypeScript Cloudflare Worker at most
+once per second. Uploads use a small in-memory buffer; excess or failed batches
+are dropped. No local database or retry backlog is needed on EC2. The Worker
+stores individual probes in D1, serves a live page
 at `/honeyprinter/`, and makes one receipt per active minute. Receipts are saved in
 D1 and sent to a Cloudflare HTTP-pull queue for the Pi. Summaries are deterministic
 mock text until OpenAI is enabled. The Pi currently renders receipts to stdout;
@@ -33,8 +35,7 @@ In another terminal, at the project root:
 cargo build --locked
 export HONEYPRINTER_INGEST_TOKEN=local-development-token-change-me
 ./target/debug/honeyprinter \
-  --ingest-url http://localhost:8787/honeyprinter/api/probes \
-  --outbox ./honeyprinter-outbox.sqlite
+  --ingest-url http://localhost:8787/honeyprinter/api/probes
 ```
 
 Open `http://localhost:8787/honeyprinter/` and probe the decoy as shown below.
@@ -66,7 +67,8 @@ The initial empty cloud resources have been provisioned:
 3. Set repository Actions variable `CLOUDFLARE_DEPLOY_ENABLED` to `true`.
 4. Push to `main` or run **Test and deploy** with `workflow_dispatch`.
 
-CI tests Rust, all 35 endpoints, retries, the Worker/D1 flow and the Pi stub. It
+CI tests Rust, all 35 endpoints, batch pacing and overflow, the Worker/D1 flow
+and the Pi stub. It
 also builds a Linux x86-64 binary artifact. The deploy job applies D1 migrations,
 then publishes the Worker, assets, secrets, minute cron and
 `ostro.ws/honeyprinter*` route. Other website paths keep their existing routing.
@@ -82,13 +84,18 @@ not advance the event cursor. No API key means no OpenAI calls in mock mode.
 
 ## Storage, delivery and the page
 
-Each connection produces one authenticated `POST /honeyprinter/api/probes`.
-Event UUIDs deduplicate retries while retained in D1. The public page reads
+Connections are collected into one authenticated `POST /honeyprinter/api/probes`
+per second at most, per process. Each request carries a `probe_batch` envelope
+with an `events` array. The Worker validates the whole batch and inserts its
+individual events with one atomic SQL statement. UUIDs deduplicate repeated
+events while retained in D1. Single-probe requests remain supported. The public page reads
 `GET /honeyprinter/api/events?after=<id>` and `/api/receipts?after=<id>` every five
 seconds; these are independent reads and never consume queue messages. Omitting
 the cursor starts with the latest 100 records. Cursors are monotonic database
 IDs, so equal event timestamps cannot skip rows. Public responses omit raw
-metadata and partially hide IP addresses. Probe input is bounded to 32 KiB.
+metadata and partially hide IP addresses. Each upload is bounded to 256 KiB and
+1,000 events. Batching reduces HTTP requests and SQL calls; D1 still stores and
+charges for individual event rows.
 
 The minute cron takes a D1 lease, summarizes all new stored events, and atomically
 saves the receipt and advances its cursor. Receipt rows double as a durable
@@ -105,14 +112,21 @@ retention is separately controlled by Cloudflare; delivery after that expiry is
 not guaranteed. Retained D1 receipts are available for manual replay. UUID
 deduplication likewise lasts only as long as the retained event.
 
-The Rust uploader writes SQLite with WAL and full synchronization, retries with
-1–60 second backoff, and removes events only after a 2xx acknowledgment. It
-rejects insecure non-local URLs and never follows redirects with its token.
-Rejected event bodies (HTTP 400/413/415/422) remain quarantined in the outbox;
-inspect `rejected_status` to repair them. HTTP 401/403/429 and server/network
-failures retry. The outbox defaults to 100,000 retained events; overflow drops
-new events and increments `queue_dropped` in local diagnostics. A crash can still
-lose events in the bounded memory channel before they reach SQLite.
+The Rust uploader defaults to **256 events per batch**, **1,024 waiting events**,
+and **at least one second between requests**, including after slow responses.
+There are no catch-up bursts or automatic HTTP retries. Empty buffers send
+nothing. Tune these limits with `--upload-batch-size` (1–1,000),
+`--upload-capacity`, and `--upload-interval-secs` (1–60). The byte limit also
+bounds large batches; an event that would overflow the batch is dropped.
+
+If the buffer is full, newly arriving events are dropped. A timeout or any
+non-2xx response drops the batch, including authentication and rate-limit
+errors. Drops increment `upload_dropped` in local diagnostic summaries; failed
+requests also log a warning. Listeners and local diagnostics continue during an
+outage. Shutdown allows five seconds to flush pending uploads before discarding
+them; a restart has no events to replay. The cloud summaries count only events
+that actually reached D1, so they may undercount heavy traffic. The uploader
+requires HTTPS except on localhost and never follows redirects with its token.
 
 ## Pi software stub
 
@@ -245,7 +259,7 @@ cloud receipt stream is the only input to the Pi. Neither local diagnostic
 summaries nor JSONL event logs invoke an LLM.
 
 Without `--ingest-url`, the queue remains an in-memory mock. With cloud delivery,
-events become durable when committed to the SQLite outbox. An optional JSONL log
+events become durable only after reaching D1. An optional JSONL log
 is diagnostic storage, with no replay, fsync, retention, or rotation; rotate or
 remove it during longer experiments.
 
@@ -285,8 +299,8 @@ will conflict with a real SSH daemon; arrange a separate administrative route
 before using it for the decoy. Configure the EC2 security group for the chosen
 TCP ports. Binding `0.0.0.0` only exposes IPv4; use `--bind ::` for IPv6, with
 dual-stack behavior depending on the operating system. A systemd unit template
-is in `deploy/honeyprinter.service`; it uses a dedicated user, a persistent state
-directory, and only the bind capability. Install the Linux binary at
+is in `deploy/honeyprinter.service`; it uses a dedicated user and only the bind
+capability. The listener needs no writable state directory. Install the Linux binary at
 `/usr/local/bin/honeyprinter` and use a root-owned mode-600
 `/etc/honeyprinter.env` containing `HONEYPRINTER_INGEST_TOKEN`. EC2 provisioning,
 firewall changes and installation of the systemd unit are not automated yet.
