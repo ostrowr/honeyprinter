@@ -1,18 +1,4 @@
-export interface Summary {
-  title: string;
-  body: string;
-  highlights: string[];
-}
-
-export interface Counts {
-  probes: number;
-  sources: number;
-  first_ms: number;
-  last_ms: number;
-  services: {service: string; count: number}[];
-  outcomes: {outcome: string; count: number}[];
-  samples: unknown[];
-}
+import type {Counts, Summary} from '../shared/api.ts';
 
 export function mockSummary(counts: Counts): Summary {
   const top = counts.services.slice(0, 3).map(s => `${s.service} (${s.count})`).join(', ');

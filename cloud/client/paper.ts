@@ -3,12 +3,24 @@ export const COLS = 12;
 export const WIDTH = 2.30;
 export const LENGTH = 9.35;
 const STRIDE = COLS + 1;
-const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+type Vector3 = [number, number, number];
+interface Grab {row: number; col: number; target: Vector3}
+interface Gust {x: number; y: number; z: number; force: Vector3}
+type Constraint = [from: number, to: number, length: number, strength: number];
+const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
 // A thin, stiff sheet, with structural, shear and bending constraints. Its
 // natural curl supplies bending memory; edge lengths keep drags from stretching
 // the receipt like rubber. Only the two rows inside the print head are pinned.
 export class Paper {
+  readonly rest: Float32Array;
+  readonly positions: Float32Array;
+  readonly previous: Float32Array;
+  private readonly constraints: Constraint[];
+  grab: Grab | null = null;
+  gust: Gust | null = null;
+  private time = 0;
+
   constructor() {
     this.rest = new Float32Array((ROWS + 1) * STRIDE * 3);
     for (let row = 0; row <= ROWS; row++) {
@@ -35,7 +47,7 @@ export class Paper {
     this.positions = this.rest.slice();
     this.previous = this.rest.slice();
     this.constraints = [];
-    const link = (a, b, strength) => {
+    const link = (a: number, b: number, strength: number) => {
       const i = a * 3, j = b * 3;
       const length = Math.hypot(this.rest[i] - this.rest[j], this.rest[i+1] - this.rest[j+1], this.rest[i+2] - this.rest[j+2]);
       this.constraints.push([i, j, length, strength]);
@@ -48,14 +60,11 @@ export class Paper {
       if (row + 2 <= ROWS) link(i, i + STRIDE * 2, .48);
       if (col + 2 <= COLS) link(i, i + 2, .6);
     }
-    this.grab = null;
-    this.gust = null;
-    this.time = 0;
   }
 
   reset() { this.positions.set(this.rest); this.previous.set(this.rest); this.grab = this.gust = null; }
 
-  step(dt, printing) {
+  step(dt: number, printing: boolean) {
     this.time += dt;
     const p = this.positions, rest = this.rest, previous = this.previous;
     const fixed = STRIDE * 2 * 3;
@@ -108,7 +117,7 @@ export class Paper {
       p.set(rest.subarray(0, fixed), 0);
     }
     if (this.gust) {
-      this.gust.force = this.gust.force.map(force => force * .88);
+      for (let axis = 0; axis < 3; axis++) this.gust.force[axis] *= .88;
       if (Math.hypot(...this.gust.force) < .01) this.gust = null;
     }
   }

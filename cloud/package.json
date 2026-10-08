@@ -4,14 +4,16 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --test-scheduled",
-    "check": "tsc --noEmit && npm run build:client",
-    "test": "node --test tests/*.test.mjs",
+    "check": "tsc --project tsconfig.json && tsc --project tsconfig.client.json && tsc --project tsconfig.node.json && npm run build:client",
+    "test": "node --test tests/*.test.ts",
     "migrate:local": "wrangler d1 migrations apply honeyprinter --local",
     "deploy:ci": "node scripts/deploy.ts",
-    "build:client": "node scripts/build-client.mjs"
+    "build:client": "node scripts/build-client.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261008.1",
+    "@types/node": "24.19.1",
+    "@types/three": "0.186.0",
     "esbuild": "0.28.1",
     "miniflare": "5.20261006.0-alpha",
     "three": "0.186.1",

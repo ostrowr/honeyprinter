@@ -1,15 +1,45 @@
-import {ReceiptScene} from './scene.js';
+import {ReceiptScene} from './scene.ts';
+import {element} from './dom.ts';
+import type {Feed, FeedItems, PublicEvent, ReceiptRecord} from '../shared/api.ts';
 
-const $ = id => document.getElementById(id);
+const elements = {
+  'scene': element('scene', 'canvas'),
+  'machine-state': element('machine-state', 'span'),
+  'feed': element('feed', 'button'),
+  'scene-fallback': element('scene-fallback', 'div'),
+  'paper-hint': element('paper-hint', 'div'),
+  'motion': element('motion', 'button'),
+  'print-status': element('print-status', 'div'),
+  'drawer': element('drawer', 'dialog'),
+  'receipt-position': element('receipt-position', 'span'),
+  'receipt-date': element('receipt-date', 'span'),
+  'older': element('older', 'button'),
+  'newer': element('newer', 'button'),
+  'last-service': element('last-service', 'div'),
+  'last-source': element('last-source', 'span'),
+  'last-time': element('last-time', 'time'),
+  'event-count': element('event-count', 'span'),
+  'drawer-body': element('drawer-body', 'div'),
+  'drawer-title': element('drawer-title', 'h2'),
+  'close-drawer': element('close-drawer', 'button'),
+  'mode': element('mode', 'span'),
+  'connection': element('connection', 'span'),
+  'connection-dot': element('connection-dot', 'span'),
+  'read-receipt': element('read-receipt', 'button'),
+  'open-log': element('open-log', 'button'),
+  'about': element('about', 'button'),
+};
+const $ = <K extends keyof typeof elements>(id: K): (typeof elements)[K] => elements[id];
 const api = `${location.pathname.replace(/\/$/, '')}/api`;
-const time = ms => new Date(ms).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-const date = ms => new Date(ms).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+const time = (ms: number) => new Date(ms).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+const date = (ms: number) => new Date(ms).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-let eventCursor, receiptCursor, selectedReceipt, drawerView;
-let events = [], receipts = [], motionPaused = reducedMotion.matches;
-let scene;
+let eventCursor: number | undefined, receiptCursor: number | undefined, selectedReceipt: number | undefined;
+let drawerView: 'receipt' | 'log' | 'about' | undefined;
+let events: PublicEvent[] = [], receipts: ReceiptRecord[] = [], motionPaused = reducedMotion.matches;
+let scene: ReceiptScene | undefined;
 
-function node(tag, text, className) {
+function node<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, className?: string) {
   const element = document.createElement(tag);
   element.textContent = text;
   if (className) element.className = className;
@@ -28,7 +58,7 @@ try {
   $('motion').disabled = true;
 }
 
-function setMotion(paused) {
+function setMotion(paused: boolean) {
   motionPaused = paused;
   scene?.setPaused(paused);
   $('motion').replaceChildren(document.createTextNode(paused ? 'Resume motion ' : 'Pause motion '), node('span', paused ? '▷' : 'Ⅱ'));
@@ -42,7 +72,7 @@ $('motion').addEventListener('click', () => setMotion(!motionPaused));
 
 function currentReceipt() { return receipts.find(receipt => receipt.id === selectedReceipt); }
 
-function selectReceipt(id, animate = true) {
+function selectReceipt(id: number, animate = true) {
   const receipt = receipts.find(item => item.id === id);
   if (!receipt) return;
   const direction = selectedReceipt !== undefined && id < selectedReceipt ? -1 : 1;
@@ -63,7 +93,7 @@ function renderReceiptControls() {
   $('newer').disabled = index === receipts.length - 1;
 }
 
-function renderTelemetry(fresh) {
+function renderTelemetry(fresh: boolean) {
   const event = events.at(-1);
   if (!event) return;
   $('last-service').replaceChildren(document.createTextNode(event.service.toUpperCase()), node('span', `:${event.destination_port}`, 'port'));
@@ -73,16 +103,16 @@ function renderTelemetry(fresh) {
   $('event-count').textContent = events.length === 100 ? '100+' : String(events.length).padStart(2, '0');
   if (fresh) {
     const telemetry = document.querySelector('.telemetry');
-    telemetry.classList.remove('pulse');
-    requestAnimationFrame(() => telemetry.classList.add('pulse'));
+    telemetry?.classList.remove('pulse');
+    requestAnimationFrame(() => telemetry?.classList.add('pulse'));
   }
   if ($('drawer').open && drawerView === 'log') renderDrawer();
 }
 
-function receiptText(receipt) {
+function receiptText(receipt: ReceiptRecord) {
   const article = node('article', '', 'drawer-receipt');
   article.append(node('h3', 'HONEYPRINTER'), node('div', `RECEIPT ${String(receipt.id).padStart(4, '0')} / ${date(receipt.created_at_ms)}`, 'receipt-meta'));
-  const row = (label, value, total = false) => {
+  const row = (label: string, value: number, total = false) => {
     const item = node('div', '', total ? 'receipt-line receipt-total' : 'receipt-line');
     item.append(node('span', label), node('span', String(value)));
     return item;
@@ -121,7 +151,7 @@ function renderDrawer() {
   }
 }
 
-for (const [id, view] of [['read-receipt', 'receipt'], ['open-log', 'log'], ['about', 'about']]) {
+for (const [id, view] of [['read-receipt', 'receipt'], ['open-log', 'log'], ['about', 'about']] as const) {
   $(id).addEventListener('click', () => { drawerView = view; renderDrawer(); $('drawer').showModal(); });
 }
 $('close-drawer').addEventListener('click', () => $('drawer').close());
@@ -129,7 +159,7 @@ $('drawer').addEventListener('click', event => {
   const rect = $('drawer').getBoundingClientRect();
   if (event.target === $('drawer') && (event.clientX < rect.left || event.clientX > rect.right)) $('drawer').close();
 });
-for (const [id, delta] of [['older', -1], ['newer', 1]]) $(id).addEventListener('click', () => {
+for (const [id, delta] of [['older', -1], ['newer', 1]] as const) $(id).addEventListener('click', () => {
   const index = receipts.findIndex(receipt => receipt.id === selectedReceipt);
   const next = receipts[index + delta];
   if (next) selectReceipt(next.id);
@@ -139,7 +169,7 @@ $('feed').addEventListener('click', () => {
   $('print-status').textContent = currentReceipt() ? `${motionPaused ? 'Showing' : 'Replaying'} receipt ${selectedReceipt}. No physical print is sent.` : 'Paper loaded. Waiting for the first receipt.';
 });
 
-async function fetchFeed(name, after) {
+async function fetchFeed<K extends keyof FeedItems>(name: K, after?: number): Promise<Feed<FeedItems[K]>> {
   const response = await fetch(`${api}/${name}${after === undefined ? '' : `?after=${after}`}`, {cache: 'no-store', signal: AbortSignal.timeout(10000)});
   if (!response.ok) throw new Error('Feed unavailable');
   return response.json();
@@ -149,7 +179,7 @@ async function poll() {
   let delay = 5000;
   try {
     const [eventPage, receiptPage] = await Promise.all([fetchFeed('events', eventCursor), fetchFeed('receipts', receiptCursor)]);
-    const atLatest = !receipts.length || selectedReceipt === receipts.at(-1).id;
+    const atLatest = !receipts.length || selectedReceipt === receipts.at(-1)?.id;
     const firstLoad = receiptCursor === undefined;
     events = [...events, ...eventPage.items].slice(-100); eventCursor = eventPage.cursor;
     receipts = [...receipts, ...receiptPage.items].slice(-100); receiptCursor = receiptPage.cursor;
@@ -164,7 +194,8 @@ async function poll() {
         const previous = receipts.at(-2);
         if (previous) scene?.showReceipt(previous, false);
       }
-      selectReceipt(receipts.at(-1).id);
+      const latest = receipts.at(-1);
+      if (latest) selectReceipt(latest.id);
     } else renderReceiptControls();
     if (eventPage.has_more || receiptPage.has_more) delay = 250;
   } catch {

@@ -1,13 +1,15 @@
+import type {ReceiptRecord} from '../shared/api.ts';
+
 const PAPER_WIDTH = 230;
 const PAGE_HEIGHT = 370;
 const MONO = '"SFMono-Regular", Consolas, "Liberation Mono", monospace';
 
-export function drawReceipt(ctx, receipt) {
+export function drawReceipt(ctx: CanvasRenderingContext2D, receipt: ReceiptRecord | null) {
     ctx.fillStyle = '#f9f6ed'; ctx.fillRect(0, 0, PAPER_WIDTH, PAGE_HEIGHT);
     ctx.fillStyle = '#080c08'; ctx.textAlign = 'center';
     ctx.font = `700 20px ${MONO}`; ctx.fillText('HONEYPRINTER', PAPER_WIDTH / 2, 32);
     ctx.font = `600 10px ${MONO}`; ctx.fillText('INTERNET ACTIVITY RECEIPT', PAPER_WIDTH / 2, 49);
-    const rule = y => {
+    const rule = (y: number) => {
       ctx.strokeStyle = '#676b5f'; ctx.lineWidth = .6; ctx.setLineDash([3, 3]);
       ctx.beginPath(); ctx.moveTo(20, y); ctx.lineTo(PAPER_WIDTH - 20, y); ctx.stroke(); ctx.setLineDash([]);
     };
@@ -47,7 +49,7 @@ export function drawReceipt(ctx, receipt) {
     for (let x = 5; x < PAPER_WIDTH; x += 6) ctx.fillRect(x, PAGE_HEIGHT - 7, 2, .6);
   }
 
-export function wrapText(ctx, text, width, maxLines) {
+export function wrapText(ctx: {measureText(text: string): {width: number}}, text: string, width: number, maxLines: number) {
   const words = String(text).split(/\s+/), lines = [];
   let line = '';
   for (const word of words) {

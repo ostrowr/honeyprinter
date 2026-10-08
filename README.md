@@ -50,10 +50,16 @@ This endpoint exists only in Wrangler development mode. It still enforces the
 
 ## Browser scene
 
-The printer is a Three.js scene with a constrained paper mesh. Its source is in
-`cloud/client/`; the page and feed controls are in `cloud/public/`. Wrangler builds
-`public/scene.js` automatically for development and CI, so edit the source rather
-than the generated bundle. All browser assets are served locally by the Worker.
+The printer is a Three.js scene with a constrained paper mesh. The scene and page
+controls are TypeScript in `cloud/client/`; HTML and CSS live in `cloud/public/`.
+Wrangler bundles `client/app.ts` into `public/build/app.js` automatically for development
+and CI. The bundle is generated and ignored by Git. All browser assets are served
+locally by the Worker.
+
+`npm run check` strictly type-checks the Worker, browser, scripts, and tests using
+separate runtime configurations, then builds the browser bundle. API types live in
+`cloud/shared/`. Node 24 runs the TypeScript scripts and tests directly; use
+`npm test` for the test suite.
 
 Use the history arrows to retract to an older receipt or feed forward to a newer
 one. Drag the paper or click the orange button on the printer to replay a receipt.

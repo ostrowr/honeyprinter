@@ -1,14 +1,44 @@
 import * as THREE from 'three';
+import {context2d, element} from './dom.ts';
+import type {ReceiptRecord} from '../shared/api.ts';
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
-import {Paper, ROWS, COLS, WIDTH, LENGTH} from './paper.js';
-import {drawReceipt} from './receipt.js';
-import {PaperRoll, PAGE_HEIGHT} from './roll.js';
+import {Paper, ROWS, COLS, WIDTH, LENGTH} from './paper.ts';
+import {drawReceipt} from './receipt.ts';
+import {PaperRoll, PAGE_HEIGHT} from './roll.ts';
 
 const clamp = THREE.MathUtils.clamp;
 
 export class ReceiptScene {
-  constructor(canvas, onMotion) {
+  private readonly canvas: HTMLCanvasElement;
+  private readonly onMotion: (direction: number) => void;
+  private readonly renderer: THREE.WebGLRenderer;
+  private readonly world: THREE.Scene;
+  private readonly camera: THREE.OrthographicCamera;
+  private readonly raycaster: THREE.Raycaster;
+  private readonly pointer: THREE.Vector2;
+  private readonly dragPlane: THREE.Plane;
+  private readonly dragOffset: THREE.Vector3;
+  private previousHit: THREE.Vector3 | null;
+  private readonly roll: PaperRoll<ReceiptRecord>;
+  private time: number;
+  private accumulator: number;
+  private lastFrame: number;
+  private frameId: number;
+  private paused: boolean;
+  private direction: number;
+  private readonly paper: Paper;
+  private contextLost = false;
+  private buttonPress = 0;
+  // Created synchronously by the setup methods called in the constructor.
+  private environment!: THREE.WebGLRenderTarget;
+  private printer!: THREE.Group;
+  private roller!: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>;
+  private feedButton!: THREE.Mesh<RoundedBoxGeometry, THREE.MeshStandardMaterial>;
+  private ledMaterial!: THREE.MeshStandardMaterial;
+  private sheet!: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
+
+  constructor(canvas: HTMLCanvasElement, onMotion: (direction: number) => void) {
     this.canvas = canvas;
     this.onMotion = onMotion;
     this.renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: true, powerPreference: 'low-power'});
@@ -78,7 +108,7 @@ export class ReceiptScene {
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.ShadowMaterial({color: 0x32392d, opacity: .13}));
     floor.rotation.x = -Math.PI / 2; floor.position.y = .004; floor.receiveShadow = true; this.world.add(floor);
     const shadowCanvas = document.createElement('canvas'); shadowCanvas.width = shadowCanvas.height = 128;
-    const ctx = shadowCanvas.getContext('2d'), gradient = ctx.createRadialGradient(64, 64, 13, 64, 64, 64);
+    const ctx = context2d(shadowCanvas), gradient = ctx.createRadialGradient(64, 64, 13, 64, 64, 64);
     gradient.addColorStop(0, '#29322385'); gradient.addColorStop(.5, '#29322336'); gradient.addColorStop(1, '#29322300');
     ctx.fillStyle = gradient; ctx.fillRect(0, 0, 128, 128);
     const contact = new THREE.Mesh(new THREE.PlaneGeometry(5.4, 4.3), new THREE.MeshBasicMaterial({map: new THREE.CanvasTexture(shadowCanvas), transparent: true, depthWrite: false, opacity: .6}));
@@ -93,7 +123,7 @@ export class ReceiptScene {
     const rubber = new THREE.MeshStandardMaterial({color: 0x111713, roughness: .85});
     const seam = new THREE.MeshStandardMaterial({color: 0x1b231c, roughness: .65});
     const metal = new THREE.MeshStandardMaterial({color: 0xa6aaa0, roughness: .28, metalness: .85});
-    const box = (size, position, material, radius = .08) => {
+    const box = (size: [number, number, number], position: [number, number, number], material: THREE.MeshStandardMaterial, radius = .08) => {
       const mesh = new THREE.Mesh(new RoundedBoxGeometry(...size, 4, radius), material);
       mesh.position.set(...position); mesh.castShadow = true; mesh.receiveShadow = true;
       this.printer.add(mesh); return mesh;
@@ -185,7 +215,7 @@ export class ReceiptScene {
     const pages=this.pages.length ? this.pages : [null];
     const resolution=Math.min(3,this.renderer.capabilities.maxTextureSize/(pages.length*370));
     const canvas=document.createElement('canvas');canvas.width=Math.round(230*resolution);canvas.height=Math.round(pages.length*370*resolution);
-    const ctx=canvas.getContext('2d');ctx.scale(resolution,resolution);
+    const ctx=context2d(canvas);ctx.scale(resolution,resolution);
     pages.forEach((receipt,index)=>{ctx.save();ctx.translate(0,index*370);drawReceipt(ctx,receipt);ctx.restore();});
     const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;
     texture.anisotropy=Math.min(8,this.renderer.capabilities.getMaxAnisotropy());
@@ -216,7 +246,7 @@ export class ReceiptScene {
 
   bindPointer() {
     const canvas=this.canvas;
-    const locate=event=>{
+    const locate=(event: PointerEvent)=>{
       const rect=canvas.getBoundingClientRect();
       this.pointer.set((event.clientX-rect.left)/rect.width*2-1,-(event.clientY-rect.top)/rect.height*2+1);
       this.raycaster.setFromCamera(this.pointer,this.camera);
@@ -247,9 +277,9 @@ export class ReceiptScene {
     });
     canvas.addEventListener('pointerdown',event=>{
       locate(event);const hit=paperHit();
-      if(!hit && this.raycaster.intersectObject(this.feedButton,true).length){document.getElementById('feed').click();return;}
+      if(!hit && this.raycaster.intersectObject(this.feedButton,true).length){element('feed', 'button').click();return;}
       if(this.paused)return;
-      if(!hit)return;
+      if(!hit?.face)return;
       const vertices=[hit.face.a,hit.face.b,hit.face.c];
       let nearest=vertices[0],distance=Infinity;
       for(const index of vertices) {
@@ -263,14 +293,14 @@ export class ReceiptScene {
       this.dragOffset.copy(point).sub(hit.point);
       this.paper.grab={row,col,target:point.toArray()};
       canvas.setPointerCapture(event.pointerId);canvas.classList.add('grabbing');
-      document.getElementById('paper-hint').classList.add('used');event.preventDefault();
+      element('paper-hint', 'div').classList.add('used');event.preventDefault();
     });
     const release=()=>{this.paper.grab=null;canvas.classList.remove('grabbing');};
     canvas.addEventListener('pointerup',release);canvas.addEventListener('pointercancel',release);canvas.addEventListener('lostpointercapture',release);
     canvas.addEventListener('pointerleave',()=>{this.previousHit=null;canvas.classList.remove('grabbable','feed-target');});
   }
 
-  showReceipt(receipt,animate=true,direction=1) {
+  showReceipt(receipt: ReceiptRecord,animate=true,direction=1) {
     if(!receipt)return;
     this.roll.select(receipt,direction,animate&&!this.paused);
     this.direction=this.roll.direction;this.onMotion(this.direction);
@@ -284,7 +314,7 @@ export class ReceiptScene {
     this.rebuildAtlas();this.requestFrame();
   }
 
-  setPaused(paused) {
+  setPaused(paused: boolean) {
     this.paused=paused;
     this.paper.grab=null;this.canvas.classList.remove('grabbing','grabbable');
     if(paused){this.roll.settle();this.direction=0;this.onMotion(0);this.paper.reset();this.updatePaper();}
@@ -295,7 +325,7 @@ export class ReceiptScene {
     if(!this.frameId&&!document.hidden&&!this.contextLost)this.frameId=requestAnimationFrame(timestamp=>this.frame(timestamp));
   }
 
-  frame(timestamp) {
+  frame(timestamp: number) {
     this.frameId=0;
     if(document.hidden||this.contextLost)return;
     const dt=this.lastFrame?Math.min((timestamp-this.lastFrame)/1000,.05):1/60;
@@ -323,9 +353,9 @@ export class ReceiptScene {
   }
 }
 
-function makeLabel(width,height,paint,worldWidth,worldHeight) {
+function makeLabel(width: number,height: number,paint: (context: CanvasRenderingContext2D) => void,worldWidth: number,worldHeight: number) {
   const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
-  paint(canvas.getContext('2d'));
+  paint(context2d(canvas));
   const map=new THREE.CanvasTexture(canvas);map.colorSpace=THREE.SRGBColorSpace;map.anisotropy=4;
   return new THREE.Mesh(new THREE.PlaneGeometry(worldWidth,worldHeight),new THREE.MeshStandardMaterial({map,transparent:true,roughness:.7,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-1}));
 }

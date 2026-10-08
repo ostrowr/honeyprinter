@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {PaperRoll, PAGE_HEIGHT} from '../client/roll.js';
+import {PaperRoll, PAGE_HEIGHT} from '../client/roll.ts';
 
-const receipt = id => ({id});
+const receipt = (id: number) => ({id});
 test('back retracts the existing strip and next feeds it forward without adding copies', () => {
-  const roll = new PaperRoll();
+  const roll = new PaperRoll<{id: number}>();
   roll.select(receipt(1), 1, false);
   roll.select(receipt(2), 1, false);
   const start = roll.position;
@@ -21,7 +21,7 @@ test('back retracts the existing strip and next feeds it forward without adding 
 });
 
 test('an older receipt outside the strip is inserted without replacing visible print', () => {
-  const roll = new PaperRoll();
+  const roll = new PaperRoll<{id: number}>();
   roll.select(receipt(4), 1, false);
   roll.select(receipt(3), -1);
   assert.deepEqual(roll.pages.map(page => page.id), [3, 4]);
@@ -36,12 +36,12 @@ test('an older receipt outside the strip is inserted without replacing visible p
 });
 
 test('manual feed replays the selected receipt, then back still retracts', () => {
-  const roll = new PaperRoll();
+  const roll = new PaperRoll<{id: number}>();
   roll.select(receipt(1), 1, false);
   roll.select(receipt(2), 1, false);
   roll.select(receipt(1), -1, false);
   roll.replay();
-  assert.equal(roll.pages.at(-1).id, 1);
+  assert.equal(roll.pages.at(-1)?.id, 1);
   assert.equal(roll.direction, 1);
   roll.settle();
   roll.select(receipt(0), -1);
@@ -49,7 +49,7 @@ test('manual feed replays the selected receipt, then back still retracts', () =>
 });
 
 test('the roll stays bounded across long history and reduced-motion selections settle', () => {
-  const roll = new PaperRoll();
+  const roll = new PaperRoll<{id: number}>();
   for (let id = 1; id <= 100; id++) roll.select(receipt(id), 1, false);
   for (let id = 99; id >= 1; id--) {
     roll.select(receipt(id), -1);

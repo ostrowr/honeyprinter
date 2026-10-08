@@ -15,5 +15,5 @@ cloud/.test-build/
 # Keep schema migrations even when a global ignore excludes SQL files.
 !/cloud/migrations/*.sql
 
-# Generated browser scene, rebuilt by Wrangler in development and CI.
-cloud/public/scene.js
+# Generated browser bundles, rebuilt by Wrangler in development and CI.
+cloud/public/build/

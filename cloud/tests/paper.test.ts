@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Paper, COLS} from '../client/paper.js';
+import {Paper, COLS} from '../client/paper.ts';
 
-const shift = paper => Math.max(...paper.positions.map((value, i) => Math.abs(value - paper.rest[i])));
-const step = (paper, frames, printing = false) => { for (let i = 0; i < frames; i++) paper.step(1 / 60, printing); };
-const assertPinned = paper => assert.deepEqual(paper.positions.slice(0, (COLS + 1) * 6), paper.rest.slice(0, (COLS + 1) * 6));
+const shift = (paper: Paper) => Math.max(...paper.positions.map((value, i) => Math.abs(value - paper.rest[i])));
+const step = (paper: Paper, frames: number, printing = false) => { for (let i = 0; i < frames; i++) paper.step(1 / 60, printing); };
+const assertPinned = (paper: Paper) => assert.deepEqual(paper.positions.slice(0, (COLS + 1) * 6), paper.rest.slice(0, (COLS + 1) * 6));
 
 test('the loaded sheet rests without drifting and stays attached to the print head', () => {
   const paper = new Paper();

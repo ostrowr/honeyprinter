@@ -1,20 +1,15 @@
-import {summarize, type Counts} from './model';
+import {summarize} from './model.ts';
+import type {Counts, Feed, Probe, PublicEvent, Receipt, ReceiptRecord} from '../shared/api.ts';
 
-interface Env {
+export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
-  PRINT_QUEUE: Queue;
+  PRINT_QUEUE: Pick<Queue<Receipt>, 'send'>;
   INGEST_TOKEN: string;
   SUMMARY_MODE: string;
   OPENAI_MODEL: string;
   OPENAI_API_KEY?: string;
   RETENTION_DAYS: string;
-}
-interface Probe {
-  schema_version: number; type: string; event_id: string; observed_at_ms: number;
-  source_ip: string; source_port: number; destination_port: number;
-  service: string; tls: boolean; stage: string; outcome: string;
-  duration_ms: number; bytes_in: number; bytes_out: number; details: Record<string, string | number | boolean>;
 }
 interface EventRow {id: number; received_at_ms: number; payload: string}
 const BASE = '/honeyprinter';
@@ -83,7 +78,7 @@ async function ingest(request: Request, env: Env): Promise<Response> {
     : {event_id: probes[0].event_id, duplicate: result.meta.changes === 0}, result.meta.changes ? 201 : 200);
 }
 
-function publicEvent(row: EventRow) {
+function publicEvent(row: EventRow): PublicEvent {
   const p = JSON.parse(row.payload) as Probe;
   // Expose the observed source address, while keeping raw protocol metadata private.
   const source = p.source_ip;
@@ -106,8 +101,8 @@ async function feed(url: URL, env: Env, receipts = false) {
   const rows = after === undefined
     ? (await env.DB.prepare(`SELECT ${columns} FROM ${table} ORDER BY id DESC LIMIT 100`).all<EventRow>()).results.reverse()
     : (await env.DB.prepare(`SELECT ${columns} FROM ${table} WHERE id > ? ORDER BY id LIMIT 100`).bind(after).all<EventRow>()).results;
-  const items = receipts ? rows.map(r => ({...JSON.parse(r.payload), id: r.id})) : rows.map(publicEvent);
-  return json({items, cursor: rows.at(-1)?.id ?? after ?? 0, has_more: rows.length === 100, mode: env.SUMMARY_MODE});
+  const items = receipts ? rows.map(r => ({...JSON.parse(r.payload) as Receipt, id: r.id})) : rows.map(publicEvent);
+  return json({items, cursor: rows.at(-1)?.id ?? after ?? 0, has_more: rows.length === 100, mode: env.SUMMARY_MODE} satisfies Feed<PublicEvent | ReceiptRecord>);
 }
 
 async function flushPrints(env: Env) {
@@ -141,7 +136,7 @@ export async function tick(env: Env) {
       const counts = {...total.results[0] as Record<string, unknown>, services: services.results, outcomes: outcomes.results,
         samples: (examples.results as unknown as EventRow[]).map(publicEvent)} as Counts;
       const summary = await summarize(counts, env);
-      const receipt = {schema_version: 1, type: 'receipt', receipt_id: `receipt-${to}`, created_at_ms: now,
+      const receipt: Receipt = {schema_version: 1, type: 'receipt', receipt_id: `receipt-${to}`, created_at_ms: now,
         first_event_id: from + 1, last_event_id: to, counts, summary,
         summarizer: env.SUMMARY_MODE === 'mock' ? 'mock' : env.OPENAI_MODEL};
       // Both statements commit together. The lease token fences off an expired invocation.
