@@ -11,3 +11,6 @@ node_modules/
 *.db*
 .DS_Store
 cloud/.test-build/
+
+# Keep schema migrations even when a global ignore excludes SQL files.
+!/cloud/migrations/*.sql
