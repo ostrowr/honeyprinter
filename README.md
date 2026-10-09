@@ -63,10 +63,10 @@ separate runtime configurations, then builds the browser bundle. API types live 
 `npm test` for the test suite.
 
 Use the history arrows to retract to an older receipt or feed forward to a newer
-one. Drag the paper or click the orange button on the printer to replay a receipt.
-The keyboard-accessible **Feed paper** control does the same thing. Replays only
-animate the webpage; they do not enqueue physical print jobs. Reduced-motion
-preferences and **Pause motion** stop the animation while keeping the feed live.
+one, or drag the loose paper. **Last 24h** opens port counts, hourly activity, and
+exchange outcomes. The printer’s small display counts down to the next UTC minute
+and shows **Preparing** while waiting for the scheduled report.
+Reduced-motion preferences and **Pause motion** stop the animation while keeping the feed live.
 
 ## Deploy through CI
 
@@ -135,6 +135,12 @@ for the same minute. The Pi enforces at least 60 seconds between physical prints
 Quiet minutes produce a stored, deterministic report for the webpage without an
 OpenAI call or queue message. Their event bounds both equal the last consumed
 event cursor, and they do not advance that cursor.
+
+The daily activity snapshot uses compact per-minute port/outcome totals, refreshed
+by cron. Page requests read one saved snapshot rather than scanning raw events.
+It covers the 24 hours ending at the latest completed minute, based on arrival
+time; existing consumed events are backfilled by the first cron after deployment. The totals
+expire after their 24-hour window.
 
 Default retention is seven days for summarized events, quiet reports, and enqueued receipts.
 Cleanup checks the oldest row and removes bounded chunks, avoiding full-table

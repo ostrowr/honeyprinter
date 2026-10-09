@@ -4,7 +4,7 @@ import {readFile, readdir} from 'node:fs/promises';
 import {build} from 'esbuild';
 import {Miniflare, convertV4MiniflareOptions} from 'miniflare';
 import {randomUUID} from 'node:crypto';
-import type {Feed, FeedItems, Probe, Receipt} from '../shared/api.ts';
+import type {Activity, Feed, FeedItems, Probe, Receipt} from '../shared/api.ts';
 
 let mf: Miniflare;
 let db: Awaited<ReturnType<Miniflare['getD1Database']>>;
@@ -212,4 +212,57 @@ test('an empty installation prints quiet page reports without an API key and exp
   await tick(false, minute + 60_000);
   assert.equal((await first<{n: number}>('SELECT COUNT(*) AS n FROM receipts WHERE created_at_ms = 0 AND probe_count = 0')).n, 0);
   assert.equal(await count('delivered'), delivered);
+});
+
+
+test('24-hour activity counts all probes by port, expires old minutes and avoids recounting retries', async () => {
+  await db.exec('DELETE FROM events');
+  await db.exec('DELETE FROM activity_minutes');
+  await db.exec('UPDATE summary_state SET last_receipt_ms = 0, last_event_id = 0, activity_last_event_id = 0, activity_json = NULL');
+  const read = async (): Promise<Activity> => (await mf.dispatchFetch(`${base}/api/activity`)).json() as Promise<Activity>;
+  assert.equal((await read()).generated_at_ms, 0);
+  const minute = Math.floor(Date.now() / 60_000) * 60_000, from = minute - 86_400_000;
+  const insertAt = async (received: number, events: Probe[]) => {
+    const before = (await first<{id: number | null}>('SELECT MAX(id) AS id FROM events')).id ?? 0;
+    const batch = {schema_version:1,type:'probe_batch',events};
+    await send(batch); await send(batch); // Repeated uploads must not affect totals.
+    await db.prepare('UPDATE events SET received_at_ms = ? WHERE id > ?').bind(received, before).run();
+  };
+  await insertAt(from - 1, [probe({destination_port:23,service:'telnet'})]);
+  await insertAt(from, [probe({destination_port:80,service:'http'})]);
+  await insertAt(minute - 120_000, Array.from({length:125}, () => probe({destination_port:22,service:'ssh'})));
+  await insertAt(minute - 60_000, [probe({destination_port:443,service:'https',outcome:'timeout'}),probe({destination_port:8443,service:'https'})]);
+  await insertAt(minute, [probe({destination_port:6379,service:'redis'})]);
+  // Simulate upgrading an existing installation: the old Worker has consumed
+  // most events, including some after the migration, but totals start at zero.
+  await db.exec('UPDATE summary_state SET last_event_id = (SELECT MAX(id) - 2 FROM events)');
+  assert.equal((await tick(false, minute)).status, 200);
+  const activity = await read();
+  assert.equal(activity.probes, 128, 'includes rows beyond the 100-event browser log');
+  assert.equal(activity.from_ms, from); assert.equal(activity.to_ms, minute);
+  assert.deepEqual(activity.ports, [
+    {port:22,service:'ssh',probes:125}, {port:80,service:'http',probes:1},
+    {port:443,service:'https',probes:1}, {port:8443,service:'https',probes:1},
+  ]);
+  assert.equal(activity.hours.length, 24);
+  assert.equal(activity.hours[0].probes, 1);
+  assert.equal(activity.hours[23].probes, 127);
+  assert.equal(activity.hours.reduce((total,hour) => total + hour.probes,0), 128);
+  assert.deepEqual(activity.outcomes, [{outcome:'completed',probes:127},{outcome:'timeout',probes:1}]);
+  await Promise.all([tick(false, minute), tick(false, minute)]);
+  assert.deepEqual(await read(), activity);
+  await insertAt(minute - 60_000, [probe({destination_port:22,service:'ssh'})]);
+  assert.equal((await tick(false, minute + 60_000)).status, 200);
+  assert.equal((await read()).probes, 129, 'later arrivals add once to the existing totals');
+  const updatedPorts = (await read()).ports;
+  assert.equal(updatedPorts[0].probes, 126);
+  // Retention can remove raw records without changing the already aggregated day.
+  await db.exec('DELETE FROM events');
+  const state = await first<{last_event_id:number}>('SELECT last_event_id FROM summary_state');
+  await db.prepare("INSERT INTO activity_minutes VALUES (?,25,'smtp','completed',50)").bind(from-60_000).run();
+  assert.equal((await tick(false, minute + 120_000)).status, 200);
+  assert.deepEqual((await read()).ports, updatedPorts);
+  assert.equal((await read()).probes, 129);
+  assert.equal((await first<{n:number}>(`SELECT COUNT(*) AS n FROM activity_minutes WHERE minute_ms < ${from}`)).n, 0);
+  assert.equal((await first<{last_event_id:number}>('SELECT last_event_id FROM summary_state')).last_event_id, state.last_event_id);
 });

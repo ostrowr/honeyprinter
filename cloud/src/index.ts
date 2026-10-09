@@ -1,4 +1,5 @@
 import {summarize} from './model.ts';
+import {readActivity, refreshActivity} from './activity.ts';
 import type {Counts, Feed, Probe, PublicEvent, Receipt, ReceiptRecord} from '../shared/api.ts';
 
 export interface Env {
@@ -102,7 +103,7 @@ async function feed(url: URL, env: Env, receipts = false) {
     ? (await env.DB.prepare(`SELECT ${columns} FROM ${table} ORDER BY id DESC LIMIT 100`).all<EventRow>()).results.reverse()
     : (await env.DB.prepare(`SELECT ${columns} FROM ${table} WHERE id > ? ORDER BY id LIMIT 100`).bind(after).all<EventRow>()).results;
   const items = receipts ? rows.map(r => ({...JSON.parse(r.payload) as Receipt, id: r.id})) : rows.map(publicEvent);
-  return json({items, cursor: rows.at(-1)?.id ?? after ?? 0, has_more: rows.length === 100, mode: env.SUMMARY_MODE} satisfies Feed<PublicEvent | ReceiptRecord>);
+  return json({server_time_ms: Date.now(), items, cursor: rows.at(-1)?.id ?? after ?? 0, has_more: rows.length === 100, mode: env.SUMMARY_MODE} satisfies Feed<PublicEvent | ReceiptRecord>);
 }
 
 async function flushPrints(env: Env) {
@@ -142,15 +143,24 @@ export async function tick(env: Env, scheduledTime = Date.now()) {
     }
     const quiet = counts.probes === 0;
     const summary = quiet ? {title: 'All quiet', body: 'No new connections recorded. Another quiet minute on the internet.', highlights: []} : await summarize(counts, env);
-    const receipt: Receipt = {schema_version: 1, type: 'receipt', receipt_id: quiet ? `quiet-${minute}` : `receipt-${to}`, created_at_ms: now,
+    const receipt: Receipt = {schema_version: 1, type: 'receipt', receipt_id: quiet ? `quiet-${minute}` : `receipt-${to}`, created_at_ms: now, scheduled_at_ms: minute,
       first_event_id: quiet ? from : from + 1, last_event_id: to, counts, summary,
       summarizer: quiet ? 'quiet' : env.SUMMARY_MODE === 'mock' ? 'mock' : env.OPENAI_MODEL};
-    // Both statements commit together. The lease token fences off an expired invocation.
+    // Receipt, minute totals, and cursor commit together. The lease token fences off an expired invocation.
     await env.DB.batch([
+      // The independent totals cursor also covers receipts made by the old Worker during deployment.
+      env.DB.prepare(`INSERT INTO activity_minutes (minute_ms, port, service, outcome, probes)
+        SELECT (received_at_ms / 60000) * 60000, json_extract(payload, '$.destination_port'), service, outcome, COUNT(*) FROM events
+        WHERE id > (SELECT activity_last_event_id FROM summary_state WHERE id = 1) AND id <= ? AND received_at_ms >= ?
+          AND EXISTS (SELECT 1 FROM summary_state WHERE id = 1 AND lease_token = ?)
+        GROUP BY 1, 2, 3, 4
+        ON CONFLICT(minute_ms, port, service, outcome) DO UPDATE SET probes = probes + excluded.probes`)
+        .bind(to, Math.floor(now / 60_000) * 60_000 - 86_400_000, token),
       env.DB.prepare('INSERT INTO receipts (receipt_id, created_at_ms, first_event_id, last_event_id, probe_count, payload) SELECT ?, ?, ?, ?, ?, ? FROM summary_state WHERE id = 1 AND lease_token = ?')
         .bind(receipt.receipt_id, now, receipt.first_event_id, to, counts.probes, JSON.stringify(receipt), token),
-      env.DB.prepare('UPDATE summary_state SET last_event_id = ?, last_receipt_ms = ? WHERE id = 1 AND lease_token = ?').bind(to, minute, token),
+      env.DB.prepare('UPDATE summary_state SET last_event_id = ?, activity_last_event_id = ?, last_receipt_ms = ? WHERE id = 1 AND lease_token = ?').bind(to, to, minute, token),
     ]);
+    await refreshActivity(env.DB, now, token);
     await flushPrints(env);
     // Bound each cleanup pass. Never delete events waiting to be summarized or receipts waiting to enqueue.
     const cutoff = now - Math.max(1, Number(env.RETENTION_DAYS) || 7) * 86_400_000;
@@ -176,6 +186,7 @@ export default {
       if (request.method !== 'GET' && request.method !== 'HEAD') return json({error: 'Method not allowed'}, 405);
       if (path === `${BASE}/api/events`) return await feed(url, env);
       if (path === `${BASE}/api/receipts`) return await feed(url, env, true);
+      if (path === `${BASE}/api/activity`) return json(await readActivity(env.DB));
       if (path === `${BASE}/api/status`) return json({mode: env.SUMMARY_MODE, model: env.SUMMARY_MODE === 'openai' ? env.OPENAI_MODEL : null, cadence_seconds: 60, retention_days: Number(env.RETENTION_DAYS)});
       if (path === BASE) return Response.redirect(`${url.origin}${BASE}/`, 308);
       if (!path.startsWith(`${BASE}/`) || path.startsWith(`${BASE}/api/`)) return json({error: 'Not found'}, 404);

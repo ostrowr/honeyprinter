@@ -6,6 +6,7 @@ import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {Paper, ROWS, COLS, WIDTH, LENGTH} from './paper.ts';
 import {drawReceipt} from './receipt.ts';
 import {PaperRoll, PAGE_HEIGHT} from './roll.ts';
+import type {Countdown} from './countdown.ts';
 
 const clamp = THREE.MathUtils.clamp;
 
@@ -29,12 +30,13 @@ export class ReceiptScene {
   private direction: number;
   private readonly paper: Paper;
   private contextLost = false;
-  private buttonPress = 0;
+  private countdown?: Countdown;
+  private displayCanvas!: HTMLCanvasElement;
+  private displayTexture!: THREE.CanvasTexture;
   // Created synchronously by the setup methods called in the constructor.
   private environment!: THREE.WebGLRenderTarget;
   private printer!: THREE.Group;
   private roller!: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>;
-  private feedButton!: THREE.Mesh<RoundedBoxGeometry, THREE.MeshStandardMaterial>;
   private ledMaterial!: THREE.MeshStandardMaterial;
   private sheet!: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
 
@@ -165,20 +167,22 @@ export class ReceiptScene {
     }
     const teethGeo = new THREE.BufferGeometry(); teethGeo.setAttribute('position', new THREE.Float32BufferAttribute(teeth,3)); teethGeo.computeVertexNormals();
     const blade = new THREE.Mesh(teethGeo, new THREE.MeshStandardMaterial({color:0xbcc0b4,metalness:.8,roughness:.4,side:THREE.DoubleSide})); this.printer.add(blade);
-    box([.48,.035,.49], [1.34,1.764,.77], seam,.09);
-    const button = box([.35,.065,.35], [1.34,1.799,.77], new THREE.MeshStandardMaterial({color:0xba633e,roughness:.46}),.075);
-    this.feedButton = button;
-    const buttonLabel = makeLabel(128,128,ctx => {
-      ctx.strokeStyle = '#f3c69b'; ctx.lineWidth = 5;
-      for (let i=0;i<3;i++) { ctx.beginPath(); ctx.moveTo(39,45+i*16); ctx.lineTo(89,45+i*16); ctx.stroke(); }
-    },.23,.23);
-    buttonLabel.rotation.x = -Math.PI/2; buttonLabel.position.set(0,.034,0); button.add(buttonLabel);
-    box([.12,.017,.12],[.84,1.765,.76],rubber,.04);
-    this.ledMaterial = new THREE.MeshStandardMaterial({color:0xa9bd79, emissive:0xa7c76e, emissiveIntensity:.5, roughness:.25});
+    // A restrained LCD in the fascia, readable without floating UI over the paper.
+    box([1.04,.42,.035], [1.03,1.015,1.4], rubber, .035);
+    this.displayCanvas = document.createElement('canvas');
+    this.displayCanvas.width = 384; this.displayCanvas.height = 144;
+    this.displayTexture = new THREE.CanvasTexture(this.displayCanvas);
+    this.displayTexture.colorSpace = THREE.SRGBColorSpace;
+    this.displayTexture.minFilter = THREE.LinearFilter;
+    const display = new THREE.Mesh(new THREE.PlaneGeometry(.94,.35), new THREE.MeshBasicMaterial({map:this.displayTexture}));
+    display.position.set(1.03,1.015,1.42); this.printer.add(display);
+    this.ledMaterial = new THREE.MeshStandardMaterial({color:0xa9bd79, emissive:0xa7c76e, emissiveIntensity:.35, roughness:.25});
+    box([.12,.017,.12],[1.32,1.765,.78],rubber,.04);
     const led = new THREE.Mesh(new THREE.SphereGeometry(.037,16,12),this.ledMaterial);
-    led.scale.y=.35; led.position.set(.84,1.78,.76); this.printer.add(led);
-    const powerLabel = makeLabel(128,40,ctx => {ctx.fillStyle='#929c84';ctx.font='20px monospace';ctx.fillText('POWER',19,26);},.30,.095);
-    powerLabel.rotation.x=-Math.PI/2;powerLabel.position.set(.84,1.768,1.0);this.printer.add(powerLabel);
+    led.scale.y=.35; led.position.set(1.32,1.78,.78); this.printer.add(led);
+    const statusLabel = makeLabel(128,40,ctx => {ctx.fillStyle='#929c84';ctx.font='20px monospace';ctx.fillText('STATUS',12,26);},.30,.095);
+    statusLabel.rotation.x=-Math.PI/2;statusLabel.position.set(1.32,1.768,1.0);this.printer.add(statusLabel);
+    this.setCountdown({phase:'connecting',label:'CONNECTING',value:'—',seconds:0,progress:0});
     for (let i=0;i<9;i++) box([.014,.35,.045],[1.824,.79,-.85+i*.105],rubber,.007);
     box([.07,.25,.45],[1.826,1.39,.44],seam,.025);
     // Connector and soft cable resting on the same surface as the feet.
@@ -266,7 +270,6 @@ export class ReceiptScene {
       } else {
         const hit=paperHit();
         canvas.classList.toggle('grabbable',!!hit);
-        canvas.classList.toggle('feed-target',!hit && this.raycaster.intersectObject(this.feedButton,true).length>0);
         if(hit && this.previousHit) {
           const force=hit.point.clone().sub(this.previousHit).multiplyScalar(90).clampLength(0,18);
           this.paper.gust={x:hit.point.x,y:hit.point.y,z:hit.point.z,force:force.toArray()};
@@ -277,7 +280,6 @@ export class ReceiptScene {
     });
     canvas.addEventListener('pointerdown',event=>{
       locate(event);const hit=paperHit();
-      if(!hit && this.raycaster.intersectObject(this.feedButton,true).length){element('feed', 'button').click();return;}
       if(this.paused)return;
       if(!hit?.face)return;
       const vertices=[hit.face.a,hit.face.b,hit.face.c];
@@ -297,7 +299,7 @@ export class ReceiptScene {
     });
     const release=()=>{this.paper.grab=null;canvas.classList.remove('grabbing');};
     canvas.addEventListener('pointerup',release);canvas.addEventListener('pointercancel',release);canvas.addEventListener('lostpointercapture',release);
-    canvas.addEventListener('pointerleave',()=>{this.previousHit=null;canvas.classList.remove('grabbable','feed-target');});
+    canvas.addEventListener('pointerleave',()=>{this.previousHit=null;canvas.classList.remove('grabbable');});
   }
 
   showReceipt(receipt: ReceiptRecord,animate=true,direction=1) {
@@ -307,11 +309,21 @@ export class ReceiptScene {
     this.rebuildAtlas();this.requestFrame();
   }
 
-  feed() {
-    this.buttonPress=.18;
-    this.roll.replay(!this.paused);
-    this.direction=this.roll.direction;this.onMotion(this.direction);
-    this.rebuildAtlas();this.requestFrame();
+  setCountdown(countdown: Countdown) {
+    if (this.countdown?.phase === countdown.phase && this.countdown.value === countdown.value) return;
+    this.countdown = countdown;
+    const ctx = context2d(this.displayCanvas), offline = countdown.phase === 'offline' || countdown.phase === 'connecting';
+    ctx.fillStyle = '#252e26'; ctx.fillRect(0,0,384,144);
+    ctx.fillStyle = offline ? '#7c8972' : '#afbca0';
+    ctx.font = '19px monospace'; ctx.textAlign = 'center'; ctx.fillText(countdown.label,192,32);
+    ctx.font = countdown.phase === 'countdown' ? '52px monospace' : '27px monospace';
+    ctx.fillText(countdown.value,192,93);
+    ctx.fillStyle = '#424d3f'; ctx.fillRect(36,118,312,3);
+    ctx.fillStyle = countdown.phase === 'preparing' ? '#b59b74' : '#91a380';
+    ctx.fillRect(36,118,312*countdown.progress,3);
+    this.displayTexture.needsUpdate = true;
+    this.ledMaterial.emissive.setHex(offline ? 0x586052 : countdown.phase === 'preparing' ? 0xc5a16b : 0xa7c76e);
+    this.requestFrame();
   }
 
   setPaused(paused: boolean) {
@@ -344,9 +356,10 @@ export class ReceiptScene {
       if(previousDirection!==this.direction)this.onMotion(this.direction);
       this.updatePaper();
     }
-    this.ledMaterial.emissiveIntensity=this.direction!==0?.65+.25*Math.sin(this.time*12):.35;
-    this.buttonPress=this.paused?0:Math.max(0,(this.buttonPress||0)-dt);
-    this.feedButton.position.y=1.799-(this.buttonPress>0?.036:0);
+    const waiting = this.countdown?.phase === 'preparing';
+    const soon = this.countdown?.phase === 'countdown' && this.countdown.seconds <= 10;
+    const offline = !this.countdown || this.countdown.phase === 'offline' || this.countdown.phase === 'connecting';
+    this.ledMaterial.emissiveIntensity = offline ? .08 : !this.paused && (waiting || soon || this.direction !== 0) ? .4 + .15 * Math.sin(this.time * (this.direction !== 0 ? 8 : 3)) : .32;
     this.roller.rotation.x=-this.position/.047;
     this.renderer.render(this.world,this.camera);
     if(!this.paused)this.requestFrame();

@@ -41,6 +41,7 @@ export interface Receipt {
   type: 'receipt';
   receipt_id: string;
   created_at_ms: number;
+  scheduled_at_ms?: number;
   first_event_id: number;
   last_event_id: number;
   counts: Counts;
@@ -53,6 +54,7 @@ export interface ReceiptRecord extends Receipt {
 }
 
 export interface Feed<T> {
+  server_time_ms: number;
   items: T[];
   cursor: number;
   has_more: boolean;
@@ -62,4 +64,14 @@ export interface Feed<T> {
 export interface FeedItems {
   events: PublicEvent;
   receipts: ReceiptRecord;
+}
+
+export interface Activity {
+  generated_at_ms: number;
+  from_ms: number;
+  to_ms: number;
+  probes: number;
+  ports: {port: number; service: string; probes: number}[];
+  hours: {start_ms: number; probes: number}[];
+  outcomes: {outcome: string; probes: number}[];
 }

@@ -1,11 +1,14 @@
 import {ReceiptScene} from './scene.ts';
 import {element} from './dom.ts';
-import type {Feed, FeedItems, PublicEvent, ReceiptRecord} from '../shared/api.ts';
+import {activityPanel} from './activity.ts';
+import {reportCountdown} from './countdown.ts';
+import type {Activity, Feed, FeedItems, PublicEvent, ReceiptRecord} from '../shared/api.ts';
 
 const elements = {
   'scene': element('scene', 'canvas'),
   'machine-state': element('machine-state', 'span'),
-  'feed': element('feed', 'button'),
+  'open-activity': element('open-activity', 'button'),
+  'report-countdown': element('report-countdown', 'div'),
   'scene-fallback': element('scene-fallback', 'div'),
   'paper-hint': element('paper-hint', 'div'),
   'motion': element('motion', 'button'),
@@ -35,9 +38,31 @@ const time = (ms: number) => new Date(ms).toLocaleTimeString([], {hour: '2-digit
 const date = (ms: number) => new Date(ms).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let eventCursor: number | undefined, receiptCursor: number | undefined, selectedReceipt: number | undefined;
-let drawerView: 'receipt' | 'log' | 'about' | undefined;
+let drawerView: 'receipt' | 'log' | 'about' | 'activity' | undefined;
 let events: PublicEvent[] = [], receipts: ReceiptRecord[] = [], motionPaused = reducedMotion.matches;
 let scene: ReceiptScene | undefined;
+let connected = false, serverOffset = 0, latestMinute: number | undefined;
+let activity: Activity | undefined, activityLoading = false, activityFailed = false, activityAttempt = 0;
+
+function updateCountdown() {
+  const countdown = reportCountdown(Date.now() + serverOffset, latestMinute, connected);
+  scene?.setCountdown(countdown);
+  const text = countdown.phase === 'countdown' ? `Next report in ${countdown.seconds} seconds` : countdown.phase === 'preparing' ? 'Preparing the next minute report' : 'Reconnecting to the report feed';
+  $('report-countdown').textContent = text;
+  // Also useful when WebGL is unavailable, with no second-by-second announcements.
+  $('receipt-date').title = text;
+}
+
+async function loadActivity() {
+  if (activityLoading || Date.now() - activityAttempt < (activityFailed ? 10_000 : 60_000)) return;
+  activityLoading = true; activityAttempt = Date.now();
+  try {
+    const response = await fetch(`${api}/activity`, {cache:'no-store', signal:AbortSignal.timeout(10000)});
+    if (!response.ok) throw new Error('Activity unavailable');
+    activity = await response.json() as Activity; activityFailed = false;
+  } catch { activityFailed = true; }
+  finally { activityLoading = false; if ($('drawer').open && drawerView === 'activity') renderDrawer(); }
+}
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, className?: string) {
   const element = document.createElement(tag);
@@ -49,12 +74,10 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, class
 try {
   scene = new ReceiptScene($('scene'), direction => {
     $('machine-state').textContent = direction < 0 ? 'Retracting' : direction > 0 ? 'Printing' : motionPaused ? 'Motion paused' : 'Standing by';
-    $('feed').setAttribute('aria-label', direction > 0 ? 'Feed paper again' : 'Feed paper');
   });
 } catch {
   $('scene-fallback').hidden = false;
   $('paper-hint').hidden = true;
-  $('feed').disabled = true;
   $('motion').disabled = true;
 }
 
@@ -131,6 +154,9 @@ function renderDrawer() {
     $('drawer-title').textContent = 'On the paper';
     const receipt = currentReceipt();
     body.replaceChildren(receipt ? receiptText(receipt) : node('p', 'Paper loaded. The next minute report will arrive shortly.', 'empty'));
+  } else if (drawerView === 'activity') {
+    $('drawer-title').textContent = 'Last 24 hours';
+    body.replaceChildren(activityPanel(activity, activityFailed));
   } else if (drawerView === 'log') {
     $('drawer-title').textContent = 'Connection log';
     const note = node('p', 'The latest 100 recorded connections. Excess traffic may be dropped.', 'drawer-note');
@@ -144,15 +170,15 @@ function renderDrawer() {
     $('drawer-title').textContent = 'A small internet appliance';
     const copy = node('div', '', 'drawer-copy');
     copy.append(node('p', 'Honeyprinter is a tiny honeypot with a lot of open ports. It greets incoming connections, records the exchange, and turns each minute into a receipt, including a short report when the wire is quiet.'));
-    copy.append(node('span', 'The paper', 'label'), node('p', 'New receipts feed through the printer automatically. Drag the loose paper, retract to older receipts or advance with the arrows, or press Feed paper to replay the current one. Replaying here does not send a physical print.'));
+    copy.append(node('span', 'The paper', 'label'), node('p', 'New receipts feed through the printer automatically. Drag the loose paper, retract to older receipts or advance with the arrows. The small display counts down to the next minute; its light warms while a report is being prepared.'));
     copy.append(node('span', 'The real machine', 'label'), node('p', 'A Raspberry Pi will deliver the reports with traffic to a thermal printer. Quiet-minute reports appear here only.'));
     const link = node('a', 'Made by Robbie Ostrow ↗'); link.href = '/'; copy.append(link);
     body.replaceChildren(copy);
   }
 }
 
-for (const [id, view] of [['read-receipt', 'receipt'], ['open-log', 'log'], ['about', 'about']] as const) {
-  $(id).addEventListener('click', () => { drawerView = view; renderDrawer(); $('drawer').showModal(); });
+for (const [id, view] of [['read-receipt', 'receipt'], ['open-log', 'log'], ['about', 'about'], ['open-activity', 'activity']] as const) {
+  $(id).addEventListener('click', () => { drawerView = view; renderDrawer(); $('drawer').showModal(); if (view === 'activity') void loadActivity(); });
 }
 $('close-drawer').addEventListener('click', () => $('drawer').close());
 $('drawer').addEventListener('click', event => {
@@ -164,11 +190,6 @@ for (const [id, delta] of [['older', -1], ['newer', 1]] as const) $(id).addEvent
   const next = receipts[index + delta];
   if (next) selectReceipt(next.id);
 });
-$('feed').addEventListener('click', () => {
-  scene?.feed();
-  $('print-status').textContent = currentReceipt() ? `${motionPaused ? 'Showing' : 'Replaying'} receipt ${selectedReceipt}. No physical print is sent.` : 'Paper loaded. Waiting for the first receipt.';
-});
-
 async function fetchFeed<K extends keyof FeedItems>(name: K, after?: number): Promise<Feed<FeedItems[K]>> {
   const response = await fetch(`${api}/${name}${after === undefined ? '' : `?after=${after}`}`, {cache: 'no-store', signal: AbortSignal.timeout(10000)});
   if (!response.ok) throw new Error('Feed unavailable');
@@ -179,6 +200,12 @@ async function poll() {
   let delay = 5000;
   try {
     const [eventPage, receiptPage] = await Promise.all([fetchFeed('events', eventCursor), fetchFeed('receipts', receiptCursor)]);
+    connected = true;
+    serverOffset = receiptPage.server_time_ms - Date.now();
+    const newest = receiptPage.items.at(-1);
+    if (newest) latestMinute = newest.scheduled_at_ms ?? Math.floor(newest.created_at_ms / 60_000) * 60_000;
+    updateCountdown();
+    if ($('drawer').open && drawerView === 'activity') void loadActivity();
     const atLatest = !receipts.length || selectedReceipt === receipts.at(-1)?.id;
     const firstLoad = receiptCursor === undefined;
     events = [...events, ...eventPage.items].slice(-100); eventCursor = eventPage.cursor;
@@ -199,6 +226,7 @@ async function poll() {
     } else renderReceiptControls();
     if (eventPage.has_more || receiptPage.has_more) delay = 250;
   } catch {
+    connected = false; updateCountdown();
     $('connection').textContent = 'Reconnecting';
     $('connection').title = 'The feed is unavailable. Retrying shortly.';
     $('connection-dot').classList.add('offline');
@@ -206,4 +234,5 @@ async function poll() {
   }
   setTimeout(poll, delay);
 }
+setInterval(updateCountdown, 1000);
 poll();

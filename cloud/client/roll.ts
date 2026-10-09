@@ -2,7 +2,7 @@ export const PAGE_HEIGHT = 3.7;
 const MAX_PAGES = 8;
 
 // Keep the visible strip in place when inserting an older receipt. A selection
-// moves the print head along that strip; only an explicit replay adds a copy.
+// moves the print head along that strip without adding copies.
 export class PaperRoll<T extends {id: number}> {
   readonly pages: T[] = [];
   selected = -1;
@@ -31,17 +31,6 @@ export class PaperRoll<T extends {id: number}> {
     if (!this.pages.length) this.position = 0;
     else if (index <= this.selected || this.position > index * PAGE_HEIGHT + 1e-6) this.position += PAGE_HEIGHT;
     this.pages.splice(index, 0, receipt);
-  }
-
-  replay(animate = true) {
-    const receipt = this.pages[this.selected];
-    if (receipt) {
-      this.pages.push(receipt);
-      this.selected = this.pages.length - 1;
-      this.target = this.pages.length * PAGE_HEIGHT;
-      this.trim();
-    } else { this.position = 0; this.target = PAGE_HEIGHT; }
-    if (!animate) this.settle();
   }
 
   trim() {

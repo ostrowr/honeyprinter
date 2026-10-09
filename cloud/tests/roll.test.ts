@@ -35,19 +35,6 @@ test('an older receipt outside the strip is inserted without replacing visible p
   assert.equal(roll.direction, -1);
 });
 
-test('manual feed replays the selected receipt, then back still retracts', () => {
-  const roll = new PaperRoll<{id: number}>();
-  roll.select(receipt(1), 1, false);
-  roll.select(receipt(2), 1, false);
-  roll.select(receipt(1), -1, false);
-  roll.replay();
-  assert.equal(roll.pages.at(-1)?.id, 1);
-  assert.equal(roll.direction, 1);
-  roll.settle();
-  roll.select(receipt(0), -1);
-  assert.equal(roll.direction, -1);
-});
-
 test('the roll stays bounded across long history and reduced-motion selections settle', () => {
   const roll = new PaperRoll<{id: number}>();
   for (let id = 1; id <= 100; id++) roll.select(receipt(id), 1, false);

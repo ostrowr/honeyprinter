@@ -19,6 +19,9 @@ export async function verifyCloud(token: string, expected: {SUMMARY_MODE: string
         const feed = await response.json() as {items?: unknown[]; cursor?: number};
         if (!response.ok || !Array.isArray(feed.items) || typeof feed.cursor !== 'number') throw new Error(`${path} unavailable`);
       }
+      const activityResponse = await request('/api/activity');
+      const activity = await activityResponse.json() as {ports?: unknown[]; hours?: unknown[]; probes?: number};
+      if (!activityResponse.ok || !Array.isArray(activity.ports) || activity.hours?.length !== 24 || typeof activity.probes !== 'number') throw new Error('Activity snapshot unavailable');
       const denied = await request('/api/probes', {method: 'POST'});
       if (denied.status !== 401) throw new Error('Ingest authentication check failed');
       // An authorized but invalid body must reach validation, without storing a fake event.
