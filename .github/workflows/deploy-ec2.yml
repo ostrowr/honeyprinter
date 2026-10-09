@@ -1,0 +1,93 @@
+name: Deploy Rust honeypot to EC2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: honeyprinter-ec2-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --check infra/scripts/verify-deployment.ts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - name: Build a static binary for Amazon Linux
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl
+      - name: Exercise the actual deployment binary and minute summaries
+        run: python3 tests/smoke.py --binary target/x86_64-unknown-linux-musl/release/honeyprinter --check-minute
+      - uses: actions/upload-artifact@v4
+        with:
+          name: honeyprinter-ec2-binary
+          path: target/x86_64-unknown-linux-musl/release/honeyprinter
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-west-2
+      AWS_DEFAULT_REGION: us-west-2
+      TF_IN_AUTOMATION: 'true'
+      TF_VAR_artifact_bucket: honeyprinter-artifacts-316658062409-us-west-2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: honeyprinter-ec2-binary
+          path: release
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::316658062409:role/honeyprinter-github-deploy
+          role-session-name: honeyprinter-${{ github.run_id }}
+          aws-region: us-west-2
+          allowed-account-ids: '316658062409'
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.16.5'
+          terraform_wrapper: false
+      - name: Publish an immutable, checksummed release
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="releases/${GITHUB_SHA}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/honeyprinter"
+          digest=$(sha256sum release/honeyprinter | cut -d ' ' -f 1)
+          aws s3api put-object --bucket "$TF_VAR_artifact_bucket" --key "$key" \
+            --body release/honeyprinter --server-side-encryption AES256 \
+            --if-none-match '*' --metadata "sha256=$digest,commit=$GITHUB_SHA" > /dev/null
+          printf 'TF_VAR_artifact_key=%s\nTF_VAR_artifact_sha256=%s\n' "$key" "$digest" >> "$GITHUB_ENV"
+      - name: Initialize and review the infrastructure plan
+        working-directory: infra/terraform
+        run: |
+          terraform init -input=false -lockfile=readonly
+          terraform validate
+          terraform plan -input=false -lock-timeout=2m -out=deploy.tfplan
+      - name: Apply the reviewed plan
+        working-directory: infra/terraform
+        run: terraform apply -input=false -lock-timeout=2m deploy.tfplan
+      - name: Verify the installed binary, all listeners, and public protocols
+        run: node infra/scripts/verify-deployment.ts

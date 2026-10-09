@@ -321,8 +321,7 @@ dual-stack behavior depending on the operating system. A systemd unit template
 is in `deploy/honeyprinter.service`; it uses a dedicated user and only the bind
 capability. The listener needs no writable state directory. Install the Linux binary at
 `/usr/local/bin/honeyprinter` and use a root-owned mode-600
-`/etc/honeyprinter.env` containing `HONEYPRINTER_INGEST_TOKEN`. EC2 provisioning,
-firewall changes and installation of the systemd unit are not automated yet.
+`/etc/honeyprinter.env` containing `HONEYPRINTER_INGEST_TOKEN`. Terraform deployment and a TypeScript CDK comparison are in [`infra/`](infra/README.md). The dedicated EC2 workflow builds a static Rust binary, applies Terraform through GitHub OIDC, and verifies the running service. It installs a mock-queue systemd service; Cloudflare delivery remains separate. Run it explicitly with `gh workflow run deploy-ec2.yml --repo ostrowr/honeyprinter --ref main`.
 
 ## Verification
 

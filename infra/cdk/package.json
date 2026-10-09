@@ -1,0 +1,22 @@
+{
+  "name": "honeyprinter-infra-cdk",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test stack.test.ts",
+    "synth": "cdk synth --strict --no-lookups",
+    "synth:example": "npm run synth -- -c artifactBucket=honeyprinter-artifacts-example -c artifactKey=releases/example/honeyprinter -c artifactSha256=0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.273.0",
+    "constructs": "^10.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "aws-cdk": "2.1145.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

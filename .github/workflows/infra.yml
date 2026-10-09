@@ -1,0 +1,54 @@
+name: Compare infrastructure (validation only)
+
+on:
+  push:
+    branches: [main]
+    paths: ['infra/**', 'src/catalog.rs', '.github/workflows/infra.yml']
+  pull_request:
+    paths: ['infra/**', 'src/catalog.rs', '.github/workflows/infra.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        directory: [infra/terraform, infra/bootstrap, infra/ci-bootstrap]
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.16.5'
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform validate
+      - run: terraform test
+      - run: bash -n ../shared/bootstrap.sh
+
+  cdk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/cdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: infra/cdk/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npx tsc --project ../scripts/tsconfig.json
+      - run: npm test
+      - run: npm run synth:example
+      - uses: actions/upload-artifact@v4
+        with:
+          name: honeyprinter-cdk-template
+          path: infra/cdk/cdk.out/Honeyprinter.template.json

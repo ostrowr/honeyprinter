@@ -1,0 +1,7 @@
+{
+  "extends": "../cdk/tsconfig.json",
+  "compilerOptions": {
+    "typeRoots": ["../cdk/node_modules/@types"]
+  },
+  "include": ["*.ts"]
+}

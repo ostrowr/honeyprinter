@@ -17,3 +17,10 @@ cloud/.test-build/
 
 # Generated browser bundles, rebuilt by Wrangler in development and CI.
 cloud/public/build/
+
+# Generated infrastructure state, plans, and synthesis output.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+infra/cdk/cdk.out/
