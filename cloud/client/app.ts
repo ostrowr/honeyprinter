@@ -168,7 +168,7 @@ function renderDrawer() {
     $('drawer-title').textContent = 'A small internet appliance';
     const copy = node('div', '', 'drawer-copy');
     copy.append(node('p', 'Honeyprinter is a tiny honeypot with a lot of open ports. It greets incoming connections, records the exchange, and turns each minute into a receipt, including a short report when the wire is quiet.'));
-    copy.append(node('span', 'The paper', 'label'), node('p', 'New receipts feed through the printer automatically. Drag the loose paper, retract to older receipts or advance with the arrows. The status light glows steadily between reports and flickers gently as the paper moves.'));
+    copy.append(node('span', 'The paper', 'label'), node('p', 'New receipts feed through the printer automatically. Drag the loose paper, retract to older receipts or advance with the arrows. The small LCD shows the printer’s current state, with a quiet progress bar toward the next minute report. Its status light glows steadily between reports and flickers gently as the paper moves.'));
     copy.append(node('span', 'The real machine', 'label'), node('p', 'A Raspberry Pi will deliver the reports with traffic to a thermal printer. Quiet-minute reports appear here only.'));
     const link = node('a', 'Made by Robbie Ostrow ↗'); link.href = '/'; copy.append(link);
     body.replaceChildren(copy);
@@ -204,6 +204,8 @@ function receiveReceipts(page: Feed<ReceiptRecord>) {
   const atLatest = !receipts.length || selectedReceipt === receipts.at(-1)?.id;
   const firstLoad = receiptCursor === undefined;
   receipts = [...receipts, ...page.items].slice(-100); receiptCursor = page.cursor;
+  const newest = receipts.at(-1);
+  if (newest) scene?.setReportTiming(newest.created_at_ms, page.server_time_ms);
   $('mode').textContent = page.mode === 'mock' ? 'Mock summaries' : 'AI summaries';
   if ($('drawer').open && drawerView === 'activity') void loadActivity();
   if (page.items.length && (atLatest || !currentReceipt())) {

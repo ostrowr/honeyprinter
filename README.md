@@ -65,7 +65,10 @@ separate runtime configurations, then builds the browser bundle. API types live 
 Use the history arrows to retract to an older receipt or feed forward to a newer
 one, or drag the loose paper. **Last 24h** opens port counts, hourly activity, and
 exchange outcomes. Existing receipts appear fully printed on first load; new
-reports animate as they arrive. The status light glows steadily between reports
+reports animate as they arrive. A recessed LCD shows the printer state and a
+subtle progress bar based on the latest report’s creation time. The bar holds
+at full if a report is late; there is no numeric countdown or preparing state.
+The status light glows steadily between reports
 and flickers gently while the paper moves. The receipt and connection feeds load
 and retry independently.
 Reduced-motion preferences and **Pause motion** stop the animation while keeping the feed live.

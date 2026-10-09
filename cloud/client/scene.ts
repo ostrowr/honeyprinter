@@ -30,6 +30,11 @@ export class ReceiptScene {
   private readonly paper: Paper;
   private contextLost = false;
   private connected = false;
+  private displayState = '';
+  private reportAgeMs = 0;
+  private reportSyncedAt?: number;
+  private displayCanvas!: HTMLCanvasElement;
+  private displayTexture!: THREE.CanvasTexture;
   // Created synchronously by the setup methods called in the constructor.
   private environment!: THREE.WebGLRenderTarget;
   private printer!: THREE.Group;
@@ -164,6 +169,18 @@ export class ReceiptScene {
     }
     const teethGeo = new THREE.BufferGeometry(); teethGeo.setAttribute('position', new THREE.Float32BufferAttribute(teeth,3)); teethGeo.computeVertexNormals();
     const blade = new THREE.Mesh(teethGeo, new THREE.MeshStandardMaterial({color:0xbcc0b4,metalness:.8,roughness:.4,side:THREE.DoubleSide})); this.printer.add(blade);
+    // The glass sits behind a thin molded rim, aligned with the serial label.
+    box([.96,.30,.012], [1.09,.96,1.393], rubber, .025);
+    for (const y of [.816,1.104]) box([.96,.026,.014], [1.09,y,1.405], seam, .008);
+    for (const x of [.623,1.557]) box([.026,.262,.014], [x,.96,1.405], seam, .008);
+    this.displayCanvas = document.createElement('canvas');
+    this.displayCanvas.width = 440; this.displayCanvas.height = 120;
+    this.displayTexture = new THREE.CanvasTexture(this.displayCanvas);
+    this.displayTexture.colorSpace = THREE.SRGBColorSpace;
+    this.displayTexture.anisotropy = Math.min(4,this.renderer.capabilities.getMaxAnisotropy());
+    const display = new THREE.Mesh(new THREE.PlaneGeometry(.902,.242), new THREE.MeshStandardMaterial({map:this.displayTexture,roughness:.48}));
+    display.position.set(1.09,.96,1.401); this.printer.add(display);
+    this.updateDisplay();
     this.ledMaterial = new THREE.MeshStandardMaterial({color:0xa58c60, emissive:0x977d50, emissiveIntensity:.08, roughness:.25});
     box([.12,.017,.12],[1.32,1.765,.78],rubber,.04);
     const led = new THREE.Mesh(new THREE.SphereGeometry(.037,16,12),this.ledMaterial);
@@ -296,6 +313,33 @@ export class ReceiptScene {
     this.rebuildAtlas();this.requestFrame();
   }
 
+  private updateDisplay() {
+    const text = this.paused ? 'PAUSED' : this.direction < 0 ? 'REWINDING' : this.direction > 0 ? 'PRINTING' : this.connected ? 'NEXT REPORT' : 'CONNECTING';
+    const progress = this.connected && this.reportSyncedAt !== undefined
+      ? clamp((this.reportAgeMs + performance.now() - this.reportSyncedAt) / 60_000,0,1) : 0;
+    const filled = Math.round(356 * progress);
+    const state = `${text}:${filled}`;
+    if (state === this.displayState) return;
+    this.displayState = state;
+    const ctx = context2d(this.displayCanvas);
+    const glass = ctx.createLinearGradient(0,0,0,120);
+    glass.addColorStop(0,'#6a775d'); glass.addColorStop(.18,'#859273'); glass.addColorStop(1,'#7c896c');
+    ctx.fillStyle = glass; ctx.fillRect(0,0,440,120);
+    ctx.fillStyle = '#344130'; ctx.font = '36px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(text,220,48);
+    ctx.fillStyle = '#6a775e'; ctx.fillRect(42,89,356,7);
+    ctx.fillStyle = '#44523a'; ctx.fillRect(42,89,filled,7);
+    this.displayTexture.needsUpdate = true;
+  }
+
+  setReportTiming(createdAt: number, serverTime: number) {
+    // Follow the observed report cadence, not the minute boundary. Hold at full
+    // until a new receipt arrives rather than inventing a "preparing" state.
+    this.reportAgeMs = Math.max(0,serverTime - createdAt);
+    this.reportSyncedAt = performance.now();
+    this.requestFrame();
+  }
+
   setConnected(connected: boolean) {
     if (this.connected === connected) return;
     this.connected = connected;
@@ -335,6 +379,7 @@ export class ReceiptScene {
       this.updatePaper();
     }
     this.ledMaterial.emissiveIntensity = !this.connected ? .08 : !this.paused && this.direction !== 0 ? .4 + .15 * Math.sin(this.time * 8) : .32;
+    this.updateDisplay();
     this.roller.rotation.x=-this.position/.047;
     this.renderer.render(this.world,this.camera);
     if(!this.paused)this.requestFrame();
