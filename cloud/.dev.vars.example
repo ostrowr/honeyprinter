@@ -1,3 +1,5 @@
 INGEST_TOKEN=local-development-token-change-me
-# Only needed with SUMMARY_MODE=openai:
+# npm run dev uses mock summaries. For local Luna testing, use
+# npx wrangler dev --test-scheduled --var SUMMARY_MODE:openai
+# and provide this key:
 # OPENAI_API_KEY=

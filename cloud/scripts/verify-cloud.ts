@@ -1,7 +1,7 @@
 import {setTimeout as delay} from 'node:timers/promises';
 
 const base = 'https://ostro.ws/honeyprinter';
-export async function verifyCloud(token: string): Promise<void> {
+export async function verifyCloud(token: string, expected: {SUMMARY_MODE: string; OPENAI_MODEL: string}): Promise<void> {
   const request = (path: string, init: RequestInit = {}) => fetch(base + path,
     {...init, signal: AbortSignal.timeout(15_000), redirect: 'error'});
   const deadline = Date.now() + 180_000;
@@ -11,8 +11,9 @@ export async function verifyCloud(token: string): Promise<void> {
       const page = await request('/');
       if (!page.ok || !(await page.text()).includes('Honeyprinter')) throw new Error('Page unavailable');
       const status = await request('/api/status');
-      const body = await status.json() as {cadence_seconds?: number; mode?: string};
+      const body = await status.json() as {cadence_seconds?: number; mode?: string; model?: string | null};
       if (!status.ok || body.cadence_seconds !== 60) throw new Error('Status API unavailable');
+      if (body.mode !== expected.SUMMARY_MODE || (body.mode === 'openai' && body.model !== expected.OPENAI_MODEL)) throw new Error('Deployed summarizer configuration does not match');
       for (const path of ['/api/events', '/api/receipts']) {
         const response = await request(path);
         const feed = await response.json() as {items?: unknown[]; cursor?: number};

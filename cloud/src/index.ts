@@ -171,7 +171,7 @@ export default {
       if (request.method !== 'GET' && request.method !== 'HEAD') return json({error: 'Method not allowed'}, 405);
       if (path === `${BASE}/api/events`) return await feed(url, env);
       if (path === `${BASE}/api/receipts`) return await feed(url, env, true);
-      if (path === `${BASE}/api/status`) return json({mode: env.SUMMARY_MODE, cadence_seconds: 60, retention_days: Number(env.RETENTION_DAYS)});
+      if (path === `${BASE}/api/status`) return json({mode: env.SUMMARY_MODE, model: env.SUMMARY_MODE === 'openai' ? env.OPENAI_MODEL : null, cadence_seconds: 60, retention_days: Number(env.RETENTION_DAYS)});
       if (path === BASE) return Response.redirect(`${url.origin}${BASE}/`, 308);
       if (!path.startsWith(`${BASE}/`) || path.startsWith(`${BASE}/api/`)) return json({error: 'Not found'}, 404);
       url.pathname = path.slice(BASE.length);

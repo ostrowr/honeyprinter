@@ -145,7 +145,7 @@ function renderDrawer() {
     const copy = node('div', '', 'drawer-copy');
     copy.append(node('p', 'Honeyprinter is a tiny honeypot with a lot of open ports. It greets incoming connections, records the exchange, and turns each active minute into a receipt.'));
     copy.append(node('span', 'The paper', 'label'), node('p', 'New receipts feed through the printer automatically. Drag the loose paper, retract to older receipts or advance with the arrows, or press Feed paper to replay the current one. Replaying here does not send a physical print.'));
-    copy.append(node('span', 'The real machine', 'label'), node('p', 'A Raspberry Pi will deliver the same receipts to a thermal printer. Until then, this is its digital counterpart. Summaries are mocked for now.'));
+    copy.append(node('span', 'The real machine', 'label'), node('p', 'A Raspberry Pi will deliver the same receipts to a thermal printer. Until then, this is its digital counterpart.'));
     const link = node('a', 'Made by Robbie Ostrow ↗'); link.href = '/'; copy.append(link);
     body.replaceChildren(copy);
   }

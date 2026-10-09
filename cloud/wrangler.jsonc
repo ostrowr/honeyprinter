@@ -11,6 +11,6 @@
   "d1_databases": [{"binding": "DB", "database_name": "honeyprinter", "database_id": "0e787731-dc8c-48c9-bf83-107f1e564529", "migrations_dir": "migrations"}],
   "queues": {"producers": [{"binding": "PRINT_QUEUE", "queue": "honeyprinter-print"}]},
   "triggers": {"crons": ["* * * * *"]},
-  "vars": {"SUMMARY_MODE": "mock", "OPENAI_MODEL": "gpt-6-luna", "RETENTION_DAYS": "7"},
+  "vars": {"SUMMARY_MODE": "openai", "OPENAI_MODEL": "gpt-6-luna", "RETENTION_DAYS": "7"},
   "observability": {"enabled": true, "head_sampling_rate": 0.1}
 }

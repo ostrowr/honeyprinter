@@ -9,9 +9,9 @@ once per second. Uploads use a small in-memory buffer; excess or failed batches
 are dropped. No local database or retry backlog is needed on EC2. The Worker
 stores individual probes in D1, serves a live page
 at `/honeyprinter/`, and makes one receipt per active minute. Receipts are saved in
-D1 and sent to a Cloudflare HTTP-pull queue for the Pi. Summaries are deterministic
-mock text until OpenAI is enabled. The Pi currently renders receipts to stdout;
-the physical printer driver comes later.
+D1 and sent to a Cloudflare HTTP-pull queue for the Pi. Production summaries use
+GPT-6 Luna; local development uses deterministic mock text. The Pi currently
+renders receipts to stdout; the physical printer driver comes later.
 
 The private repository is [ostrowr/honeyprinter](https://github.com/ostrowr/honeyprinter).
 **Worker deployments happen only in GitHub Actions**, after all checks pass. The
@@ -83,8 +83,9 @@ The production cloud resources are:
 2. Set `HONEYPRINTER_INGEST_TOKEN` to 32 random bytes encoded as 64 hexadecimal
    characters in Actions secrets. The EC2 workflow installs the same credential
    on the honeypot automatically. Do not commit a real `.env` file.
-3. Set repository Actions variable `CLOUDFLARE_DEPLOY_ENABLED` to `true`.
-4. Push to `main` or run **Test and deploy** with `workflow_dispatch`.
+3. Add `OPENAI_API_KEY` in Actions secrets with access to `gpt-6-luna`.
+4. Set repository Actions variable `CLOUDFLARE_DEPLOY_ENABLED` to `true`.
+5. Push to `main` or run **Test and deploy** with `workflow_dispatch`.
 
 CI tests Rust, all 35 endpoints, batch pacing and overflow, the Worker/D1 flow
 and the Pi stub. It
@@ -93,13 +94,18 @@ then publishes the Worker, assets, secrets, minute cron and
 `ostro.ws/honeyprinter*` route. Other website paths keep their existing routing.
 `cloud/scripts/deploy.ts` refuses to deploy outside GitHub Actions.
 
-To enable GPT-6 Luna later, add `OPENAI_API_KEY` to Actions secrets and change
-`SUMMARY_MODE` from `mock` to `openai` in `cloud/wrangler.jsonc`. Push through CI.
+Production uses `SUMMARY_MODE=openai` in `cloud/wrangler.jsonc`. CI requires
+`OPENAI_API_KEY` and tests a real Luna response before applying migrations or
+publishing. This check creates no stored receipt or queue message. The deployment
+check also verifies the live mode and model. `npm run dev` explicitly overrides
+the mode to `mock`, so local development needs no API key.
 The Responses API uses `gpt-6-luna`, no reasoning tokens, a 400-token output cap,
-and a strict receipt schema. Counts cover all events since the last successful
-summary; only eight sanitized examples are sent. Full source IPs are included in the public API and summary samples; raw protocol
-metadata is excluded from both. A failed API call does
-not advance the event cursor. No API key means no OpenAI calls in mock mode.
+and a strict receipt schema. API errors, refusals, incomplete responses, and invalid
+receipts fail the attempt; the next cron retries the unsummarized events. Counts
+cover all events since the last successful summary; only eight sanitized examples
+are sent. Full source IPs are included in the public API and summary samples; raw
+protocol metadata is excluded from both. A failed API call does not advance the
+event cursor. No API key means no OpenAI calls in mock mode.
 
 ## Storage, delivery and the page
 
