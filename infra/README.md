@@ -14,12 +14,12 @@ Start with [`terraform/main.tf`](terraform/main.tf) and
 [`shared/ports.json`](shared/ports.json), so neither hides extra setup in a
 different startup script.
 
-## What either version creates
+## Infrastructure
 
 - One `t3.nano` in `us-west-2a`, running standard Amazon Linux 2023 x86-64.
 - An isolated VPC, one public subnet, an internet gateway and a route table.
-- An auto-assigned public IPv4 address. It changes after stop/start or replacement;
-  no Elastic IP is reserved in these basic versions.
+- Terraform retains one Elastic IP across stop/start and release replacements.
+  The CDK comparison still uses an auto-assigned address that changes.
 - Exactly the 35 implemented TCP ports open to the internet. Port 22 is the decoy;
   the startup script disables the real SSH daemon. Administration uses SSM.
 - HTTPS egress for S3, SSM, and Cloudflare. No NAT gateway, load balancer,
@@ -42,6 +42,12 @@ values. The existing release bucket is versioned and retains these private confi
 objects; its release readers can read them. Only the ingest token is on EC2;
 Cloudflare account credentials stay in CI. A changed token requires running both
 the Worker and EC2 workflows. The CDK comparison still starts in mock mode.
+
+The address is a separate `aws_eip` resource with `prevent_destroy`; only its
+association changes when the instance is replaced. Automatic public IP assignment
+is disabled, so the instance uses just the retained address. Expect a brief
+interruption during replacement. To permanently retire Honeyprinter, deliberately
+remove the address protection and release it; a retained idle address still bills.
 
 Both select the AWS-published AL2023 AMI at deployment time. Changing the artifact
 key, checksum, or startup script replaces the instance, ensuring installation runs
@@ -109,7 +115,7 @@ The workflow tests Rust, builds Linux x86-64 with musl, smoke-tests that exact
 binary, uploads it to a unique release key, plans and applies Terraform, and
 configures Cloudflare delivery, and verifies the running instance and live feed. It does not deploy on push, and does not deploy
 Cloudflare. Deployments are serialized. A changed binary, key, or startup script
-replaces the instance and changes its public IP; local probe history is disposable.
+replaces the instance and reattaches the same Elastic IP; local probe history is disposable.
 If verification fails after apply, inspect the existing instance through SSM and
 fix the failure; a failed CI check does not automatically destroy infrastructure.
 

@@ -25,7 +25,7 @@ resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.honeypot.id
   cidr_block              = "10.77.0.0/24"
   availability_zone       = "us-west-2a"
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
 }
 
 resource "aws_internet_gateway" "public" {
@@ -79,7 +79,7 @@ resource "aws_instance" "honeypot" {
   instance_type               = "t3.nano"
   subnet_id                   = aws_subnet.public.id
   vpc_security_group_ids      = [aws_security_group.decoys.id]
-  associate_public_ip_address = true
+  associate_public_ip_address = false
   iam_instance_profile        = data.aws_iam_instance_profile.instance.name
   user_data                   = local.user_data
   user_data_replace_on_change = true
@@ -104,10 +104,28 @@ resource "aws_instance" "honeypot" {
   ]
 }
 
+# Keep the address independent of disposable release instances.
+resource "aws_eip" "honeypot" {
+  domain = "vpc"
+  tags   = { Name = "honeyprinter" }
+  lifecycle { prevent_destroy = true }
+}
+
+resource "aws_eip_association" "honeypot" {
+  allocation_id = aws_eip.honeypot.id
+  instance_id   = aws_instance.honeypot.id
+  depends_on    = [aws_internet_gateway.public]
+}
+
 output "instance_id" {
   value = aws_instance.honeypot.id
 }
 
 output "public_ip" {
-  value = aws_instance.honeypot.public_ip
+  value      = aws_eip.honeypot.public_ip
+  depends_on = [aws_eip_association.honeypot]
+}
+
+output "elastic_ip_allocation_id" {
+  value = aws_eip.honeypot.id
 }

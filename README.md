@@ -220,18 +220,20 @@ at startup, so clients that require a trusted certificate may stop at TLS.
 For repeated probes, Node 24 can run the dependency-free TypeScript script:
 
 ```sh
-# Public instance: 200 connections across 12 protocols, at most 10 starts/second.
-node infra/scripts/probe.ts 44.249.54.42 --count 200 --rate 10
+# Copy the stable Elastic IP from the EC2 deployment summary.
+export HONEYPOT_IP=YOUR_ELASTIC_IP
+# 200 connections across 12 protocols, at most 10 starts/second.
+node infra/scripts/probe.ts "$HONEYPOT_IP" --count 200 --rate 10
 
 # Local listener using its default port offset.
 node infra/scripts/probe.ts 127.0.0.1 --port-offset 10000 --count 24
 
 # Pick a mix or increase concurrency for a burst.
-node infra/scripts/probe.ts 44.249.54.42 --services http,https,ssh,redis --count 500 --rate 50 --concurrency 16
+node infra/scripts/probe.ts "$HONEYPOT_IP" --services http,https,ssh,redis --count 500 --rate 50 --concurrency 16
 node infra/scripts/probe.ts --help
 ```
 
-Use the instance's current public IP; it changes when the instance is replaced.
+Terraform retains the Elastic IP across instance replacements.
 The script varies HTTP paths and reports expected responses and failures per
 protocol. Protocol-level rejections are expected for these decoys. Each probe has
 a deadline, active sockets and response sizes are bounded, and Ctrl-C stops new

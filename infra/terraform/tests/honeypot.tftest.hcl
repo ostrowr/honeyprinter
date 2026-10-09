@@ -12,12 +12,17 @@ variables {
 }
 
 run "honeypot" {
-  command = plan
+  command = apply
 
   assert {
     condition = (
       aws_instance.honeypot.instance_type == "t3.nano" &&
-      aws_instance.honeypot.associate_public_ip_address &&
+      !aws_instance.honeypot.associate_public_ip_address &&
+      !aws_subnet.public.map_public_ip_on_launch &&
+      aws_eip.honeypot.domain == "vpc" &&
+      aws_eip_association.honeypot.allocation_id == aws_eip.honeypot.id &&
+      aws_eip_association.honeypot.instance_id == aws_instance.honeypot.id &&
+      output.public_ip == aws_eip.honeypot.public_ip &&
       aws_instance.honeypot.user_data_replace_on_change &&
       aws_instance.honeypot.credit_specification[0].cpu_credits == "standard" &&
       aws_instance.honeypot.metadata_options[0].http_tokens == "required" &&

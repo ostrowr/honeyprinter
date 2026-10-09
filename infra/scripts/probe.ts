@@ -66,9 +66,9 @@ TLS certificates are not verified because these decoys use self-signed certs.
 Ctrl-C stops scheduling and lets in-flight probes finish. Any failures exit 1.
 
 Examples:
-  node infra/scripts/probe.ts 44.249.54.42 --count 200 --rate 10
+  node infra/scripts/probe.ts 203.0.113.10 --count 200 --rate 10
   node infra/scripts/probe.ts 127.0.0.1 --port-offset 10000 --count 24
-  node infra/scripts/probe.ts 44.249.54.42 --services http,ssh,redis --count 60
+  node infra/scripts/probe.ts 203.0.113.10 --services http,ssh,redis --count 60
 `;
 
 function positive(value: string, name: string, maximum: number): number {

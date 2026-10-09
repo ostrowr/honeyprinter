@@ -6,7 +6,7 @@ one-time prerequisite for the authorized CI deployment. Its state is stored at
 `bootstrap/ci.tfstate` in the existing state bucket.
 
 The deployment role trusts only the immutable identity of `ostrowr/honeyprinter`
-on `main`. It can manage Honeyprinter-tagged networking and instances in Oregon,
+on `main`. It can manage Honeyprinter-tagged networking, instances, and Elastic IPs in Oregon,
 launch `t3.nano` instances with IMDSv2 and encrypted volumes, pass only the
 `honeyprinter-ec2` role, upload releases, and manage `honeyprinter/prod.tfstate`
 and its lock. Systems Manager commands are limited to Honeyprinter-tagged nodes.

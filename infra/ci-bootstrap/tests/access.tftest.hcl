@@ -25,6 +25,14 @@ run "ci_is_separate_from_administration" {
     error_message = "Creating a child resource must authorize the existing tagged VPC separately."
   }
   assert {
+    condition = length([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement : statement if statement.Sid == "ManageTaggedAddress"]) == 1 && alltrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement :
+      statement.Condition.StringEquals["aws:ResourceTag/Project"] == "honeyprinter" &&
+      statement.Resource == "arn:aws:ec2:us-west-2:316658062409:elastic-ip/*"
+      if statement.Sid == "ManageTaggedAddress"
+    ])
+    error_message = "Address lifecycle permissions must stay scoped to this account, region, and project tag."
+  }
+  assert {
     condition = alltrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement :
       alltrue([for action in flatten([statement.Action]) :
         !startswith(action, "iam:") || contains(["iam:GetInstanceProfile", "iam:ListInstanceProfileTags", "iam:PassRole"], action)

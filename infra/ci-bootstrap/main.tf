@@ -172,8 +172,24 @@ resource "aws_iam_role_policy" "deploy" {
       },
       {
         Sid       = "TagNewResources", Effect = "Allow", Action = "ec2:CreateTags"
-        Resource  = concat(local.network_resources, ["${local.ec2_prefix}:instance/*", "${local.ec2_prefix}:volume/*", "${local.ec2_prefix}:network-interface/*"])
-        Condition = { StringEquals = { "ec2:CreateAction" = ["CreateVpc", "CreateSubnet", "CreateInternetGateway", "CreateRouteTable", "CreateSecurityGroup", "RunInstances"] } }
+        Resource  = concat(local.network_resources, ["${local.ec2_prefix}:instance/*", "${local.ec2_prefix}:volume/*", "${local.ec2_prefix}:network-interface/*", "${local.ec2_prefix}:elastic-ip/*"])
+        Condition = { StringEquals = { "ec2:CreateAction" = ["CreateVpc", "CreateSubnet", "CreateInternetGateway", "CreateRouteTable", "CreateSecurityGroup", "RunInstances", "AllocateAddress"] } }
+      },
+      {
+        Sid       = "AllocateTaggedAddress", Effect = "Allow", Action = "ec2:AllocateAddress"
+        Resource  = "${local.ec2_prefix}:elastic-ip/*"
+        Condition = { StringEquals = { "aws:RequestTag/Project" = "honeyprinter" } }
+      },
+      {
+        Sid       = "ManageTaggedAddress", Effect = "Allow"
+        Action    = ["ec2:AssociateAddress", "ec2:DisassociateAddress", "ec2:ReleaseAddress", "ec2:CreateTags", "ec2:DeleteTags"]
+        Resource  = "${local.ec2_prefix}:elastic-ip/*"
+        Condition = { StringEquals = { "aws:ResourceTag/Project" = "honeyprinter" } }
+      },
+      {
+        Sid       = "AssociateTaggedInstance", Effect = "Allow", Action = "ec2:AssociateAddress"
+        Resource  = "${local.ec2_prefix}:instance/*"
+        Condition = { StringEquals = { "aws:ResourceTag/Project" = "honeyprinter" } }
       },
       {
         Sid      = "LaunchSmallHoneypot", Effect = "Allow", Action = "ec2:RunInstances"
