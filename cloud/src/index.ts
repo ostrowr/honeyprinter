@@ -29,7 +29,7 @@ export function validateProbe(v: unknown): v is Probe {
     && integer(p.duration_ms, 120_000) && integer(p.bytes_in, 1_000_000) && integer(p.bytes_out, 1_000_000)
     && !!p.details && typeof p.details === 'object' && !Array.isArray(p.details)
     && Object.keys(p.details).length <= 24 && Object.entries(p.details).every(([k, v]) =>
-      /^[a-zA-Z0-9_]{1,40}$/.test(k) && ((typeof v === 'string' && v.length <= 320) || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))));
+      /^[a-zA-Z0-9_-]{1,40}$/.test(k) && ((typeof v === 'string' && v.length <= 320) || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))));
 }
 
 async function authorized(request: Request, secret?: string): Promise<boolean> {

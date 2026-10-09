@@ -130,3 +130,25 @@ test('batch ingestion validates atomically and deduplicates individual UUIDs', a
   const last = await first<{payload: string}>('SELECT payload FROM events ORDER BY id DESC LIMIT 1');
   assert.equal(JSON.parse(last.payload).event_id,same.event_id);
 });
+
+
+test('Rust HTTP metadata survives ingestion in mixed protocol batches', async () => {
+  const details = {method:'GET',path:'/.env',host:'honeyprinter.test','user-agent':'honeyprinter-probe/1'};
+  const events = [
+    probe({service:'http',destination_port:80,details}),
+    probe({service:'https',destination_port:443,tls:true,details:{...details,tls_version:'TLSv1_3'}}),
+    probe({service:'redis',destination_port:6379,details:{command:'PING'}}),
+  ];
+  const before = await count('events');
+  const response = await send({schema_version:1,type:'probe_batch',events});
+  assert.equal(response.status,201);
+  assert.deepEqual(await response.json(),{accepted:3,duplicates:0});
+  assert.equal(await count('events'),before+3);
+  for (const event of events) {
+    const stored = await db.prepare('SELECT payload FROM events WHERE event_id = ?').bind(event.event_id).first<{payload:string}>();
+    assert.ok(stored);
+    assert.deepEqual(JSON.parse(stored.payload).details,event.details);
+  }
+  assert.equal((await send(probe({details:{'invalid key':'value'}}))).status,400);
+  assert.equal((await send(probe({details:{['x'.repeat(41)]:'value'}}))).status,400);
+});

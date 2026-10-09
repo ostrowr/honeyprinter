@@ -114,7 +114,7 @@ async function readFeed(after?: number): Promise<Feed> {
 }
 let cursor = (await readFeed()).cursor;
 const observedAfter = Date.now() - 2000;
-const smokeRequest = `GET / HTTP/1.1\r\nHost: honeyprinter\r\nX-Honeyprinter-Smoke: ${process.env.GITHUB_RUN_ID}-${'v'.repeat(997)}\r\nConnection: close\r\n\r\n`;
+const smokeRequest = `GET / HTTP/1.1\r\nHost: honeyprinter\r\nUser-Agent: honeyprinter-ci/1\r\nX-Honeyprinter-Smoke: ${process.env.GITHUB_RUN_ID}-${'v'.repeat(997)}\r\nConnection: close\r\n\r\n`;
 await Promise.all([
   probe(ip, 22, '', 'SSH-2.0-'),
   probe(ip, 80, smokeRequest, 'HTTP/1.1'),
