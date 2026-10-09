@@ -15,7 +15,7 @@ the physical printer driver comes later.
 
 The private repository is [ostrowr/honeyprinter](https://github.com/ostrowr/honeyprinter).
 **Worker deployments happen only in GitHub Actions**, after all checks pass. The
-deployment job is disabled until its credentials are configured.
+live page is [ostro.ws/honeyprinter](https://ostro.ws/honeyprinter/).
 
 ## Whole system locally
 
@@ -69,7 +69,7 @@ preferences and **Pause motion** stop the animation while keeping the feed live.
 
 ## Deploy through CI
 
-The initial empty cloud resources have been provisioned:
+The production cloud resources are:
 
 | Resource | ID |
 | --- | --- |
@@ -80,9 +80,9 @@ The initial empty cloud resources have been provisioned:
 1. Add `CLOUDFLARE_API_TOKEN` in the repository's Actions secrets. Scope it to this
    account and `ostro.ws`: Account / Workers Scripts Edit, D1 Edit, Queues Edit,
    Account Settings Read; Zone / Workers Routes Edit and Zone Read.
-2. Generate a random ingest token (at least 32 random bytes), save it privately as
-   `HONEYPRINTER_INGEST_TOKEN` on the honeypot, and add the same value as the
-   `HONEYPRINTER_INGEST_TOKEN` Actions secret. Do not commit a real `.env` file.
+2. Set `HONEYPRINTER_INGEST_TOKEN` to 32 random bytes encoded as 64 hexadecimal
+   characters in Actions secrets. The EC2 workflow installs the same credential
+   on the honeypot automatically. Do not commit a real `.env` file.
 3. Set repository Actions variable `CLOUDFLARE_DEPLOY_ENABLED` to `true`.
 4. Push to `main` or run **Test and deploy** with `workflow_dispatch`.
 
@@ -147,6 +147,28 @@ them; a restart has no events to replay. The cloud summaries count only events
 that actually reached D1, so they may undercount heavy traffic. The uploader
 requires HTTPS except on localhost and never follows redirects with its token.
 
+## Read the production receipt queue without a Pi
+
+From the repository root, using Node 24 and your existing Wrangler login:
+
+```sh
+npm --prefix cloud ci
+node cloud/scripts/read-queue.ts --wrangler
+# Pull and acknowledge at most one receipt, then exit:
+node cloud/scripts/read-queue.ts --wrangler --once
+# Machine-readable receipt output:
+node cloud/scripts/read-queue.ts --wrangler --once --json
+```
+
+Without `--wrangler`, load an account-scoped Queues Edit token into
+`CLOUDFLARE_QUEUE_TOKEN`. The account and queue IDs default to this project.
+Continuous mode polls every five seconds when empty and prints at most once per
+minute. It decodes Cloudflare's base64 JSON and acknowledges only after stdout
+accepts the receipt. Invalid messages remain unacknowledged. Recent receipt IDs
+are deduplicated in memory; a restart or an acknowledgment failure may redeliver.
+This is a disposable terminal reader. Run it **instead of** the Pi: concurrent
+consumers divide jobs between them. The website reads D1 and never drains jobs.
+
 ## Pi software stub
 
 Use a separate Cloudflare API token scoped to this account with Queues Edit
@@ -194,6 +216,28 @@ printf 'PING\r\nQUIT\r\n' | nc 127.0.0.1 16379
 
 The HTTP response is intentionally a 404. TLS uses a fresh self-signed certificate
 at startup, so clients that require a trusted certificate may stop at TLS.
+
+For repeated probes, Node 24 can run the dependency-free TypeScript script:
+
+```sh
+# Public instance: 200 connections across 12 protocols, at most 10 starts/second.
+node infra/scripts/probe.ts 44.249.54.42 --count 200 --rate 10
+
+# Local listener using its default port offset.
+node infra/scripts/probe.ts 127.0.0.1 --port-offset 10000 --count 24
+
+# Pick a mix or increase concurrency for a burst.
+node infra/scripts/probe.ts 44.249.54.42 --services http,https,ssh,redis --count 500 --rate 50 --concurrency 16
+node infra/scripts/probe.ts --help
+```
+
+Use the instance's current public IP; it changes when the instance is replaced.
+The script varies HTTP paths and reports expected responses and failures per
+protocol. Protocol-level rejections are expected for these decoys. Each probe has
+a deadline, active sockets and response sizes are bounded, and Ctrl-C stops new
+probes while letting active ones finish. No credentials or dependencies are needed.
+Production sends probes to Cloudflare in bounded batches; local minute diagnostics
+also remain available through `journalctl -u honeyprinter -f -o cat`.
 
 Select services or override ports:
 
@@ -321,7 +365,7 @@ dual-stack behavior depending on the operating system. A systemd unit template
 is in `deploy/honeyprinter.service`; it uses a dedicated user and only the bind
 capability. The listener needs no writable state directory. Install the Linux binary at
 `/usr/local/bin/honeyprinter` and use a root-owned mode-600
-`/etc/honeyprinter.env` containing `HONEYPRINTER_INGEST_TOKEN`. Terraform deployment and a TypeScript CDK comparison are in [`infra/`](infra/README.md). The dedicated EC2 workflow builds a static Rust binary, applies Terraform through GitHub OIDC, and verifies the running service. It installs a mock-queue systemd service; Cloudflare delivery remains separate. Run it explicitly with `gh workflow run deploy-ec2.yml --repo ostrowr/honeyprinter --ref main`.
+`/etc/honeyprinter.env` containing `HONEYPRINTER_INGEST_TOKEN`. Terraform deployment and a TypeScript CDK comparison are in [`infra/`](infra/README.md). The dedicated EC2 workflow builds a static Rust binary, applies Terraform through GitHub OIDC, and verifies the running service. It then enables Cloudflare delivery with a root-only credential file and checks that real public probes appear in the live feed. Run it explicitly with `gh workflow run deploy-ec2.yml --repo ostrowr/honeyprinter --ref main`.
 
 ## Verification
 

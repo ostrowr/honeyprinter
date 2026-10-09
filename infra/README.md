@@ -5,7 +5,7 @@ The selected AWS account is `316658062409`, local profile `honeyprinter`, in
 Oregon (`us-west-2`). The old local login is preserved as `honeyprinter-inactive`.
 The [deployment workflow](../.github/workflows/deploy-ec2.yml) builds and deploys
 Terraform from `main` when explicitly dispatched. It uses short-lived GitHub OIDC
-credentials. Cloudflare deployment remains disabled. Shared state and CI access
+credentials. The separate application workflow deploys Cloudflare. Shared state and CI access
 were bootstrapped separately; normal EC2 deployment happens only through CI.
 
 Start with [`terraform/main.tf`](terraform/main.tf) and
@@ -22,7 +22,7 @@ different startup script.
   no Elastic IP is reserved in these basic versions.
 - Exactly the 35 implemented TCP ports open to the internet. Port 22 is the decoy;
   the startup script disables the real SSH daemon. Administration uses SSM.
-- HTTPS egress for S3 and SSM (and Cloudflare later). No NAT gateway, load balancer,
+- HTTPS egress for S3, SSM, and Cloudflare. No NAT gateway, load balancer,
   Docker daemon, SSH key pair, or CloudWatch log pipeline.
 - An instance role with SSM and private artifact access. Terraform uses the
   pre-bootstrapped `honeyprinter-ec2` profile, which can read release binaries.
@@ -32,10 +32,16 @@ different startup script.
 - A checksum-verified binary, a dedicated unprivileged user, and a systemd service
   with only the capability to bind low ports. It restarts on failure.
 
-The service uses the **mock in-memory queue**, with minute summaries in journald.
-It does not send probes to Cloudflare yet. The existing
-[`deploy/honeyprinter.service`](../deploy/honeyprinter.service) is the separate
-cloud-delivery template; neither comparison includes its ingest configuration.
+The shared first-boot script starts in mock mode, with minute summaries in journald.
+The EC2 CI workflow then runs [`configure-delivery.ts`](scripts/configure-delivery.ts):
+it uploads the Actions ingest secret as an AES256-encrypted object beside the
+private release binary, fetches it through the instance role into root-owned
+`/etc/honeyprinter.env` (0600), installs a systemd delivery override, and restarts
+the service. Terraform state, user data, and SSM command payloads contain no secret
+values. The existing release bucket is versioned and retains these private config
+objects; its release readers can read them. Only the ingest token is on EC2;
+Cloudflare account credentials stay in CI. A changed token requires running both
+the Worker and EC2 workflows. The CDK comparison still starts in mock mode.
 
 Both select the AWS-published AL2023 AMI at deployment time. Changing the artifact
 key, checksum, or startup script replaces the instance, ensuring installation runs
@@ -101,7 +107,7 @@ gh workflow run deploy-ec2.yml --repo ostrowr/honeyprinter --ref main
 
 The workflow tests Rust, builds Linux x86-64 with musl, smoke-tests that exact
 binary, uploads it to a unique release key, plans and applies Terraform, and
-verifies the running instance. It does not deploy on push, and does not deploy
+configures Cloudflare delivery, and verifies the running instance and live feed. It does not deploy on push, and does not deploy
 Cloudflare. Deployments are serialized. A changed binary, key, or startup script
 replaces the instance and changes its public IP; local probe history is disposable.
 If verification fails after apply, inspect the existing instance through SSM and

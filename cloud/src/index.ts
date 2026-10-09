@@ -109,7 +109,7 @@ async function flushPrints(env: Env) {
   const rows = (await env.DB.prepare('SELECT id, payload FROM receipts WHERE enqueued_at_ms IS NULL ORDER BY id LIMIT 50').all<{id: number; payload: string}>()).results;
   for (const row of rows) {
     // Send before marking: a crash may redeliver, but never silently lose a job.
-    await env.PRINT_QUEUE.send(JSON.parse(row.payload));
+    await env.PRINT_QUEUE.send(JSON.parse(row.payload), {contentType: 'json'});
     await env.DB.prepare('UPDATE receipts SET enqueued_at_ms = ? WHERE id = ?').bind(Date.now(), row.id).run();
   }
 }

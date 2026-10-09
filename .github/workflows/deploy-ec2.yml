@@ -89,5 +89,9 @@ jobs:
       - name: Apply the reviewed plan
         working-directory: infra/terraform
         run: terraform apply -input=false -lock-timeout=2m deploy.tfplan
+      - name: Connect the honeypot to Cloudflare
+        run: node infra/scripts/configure-delivery.ts
+        env:
+          HONEYPRINTER_INGEST_TOKEN: ${{ secrets.HONEYPRINTER_INGEST_TOKEN }}
       - name: Verify the installed binary, all listeners, and public protocols
         run: node infra/scripts/verify-deployment.ts

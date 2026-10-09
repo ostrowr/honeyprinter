@@ -83,6 +83,9 @@ const commands = [
   'pid=$(systemctl show honeyprinter --property=MainPID --value)',
   'test "$pid" -gt 1',
   `for port in ${ports.join(' ')}; do ss -H -ltnp "sport = :$port" | grep -Fq "pid=$pid," || { echo "Missing listener: $port"; exit 1; }; done`,
+  'test "$(stat -c %a /etc/honeyprinter.env)" = 600',
+  'test "$(stat -c %U /etc/honeyprinter.env)" = root',
+  'tr "\\0" " " < /proc/"$pid"/cmdline | grep -Fq -- "--ingest-url https://ostro.ws/honeyprinter/api/probes"',
   'systemctl show honeyprinter --property=ActiveState,SubState,NRestarts,MemoryCurrent',
   `echo 'Verified checksum and ${ports.length} Honeyprinter listeners'`,
 ];
@@ -102,15 +105,37 @@ if (invocation.Status !== 'Success') {
   throw new Error(`SSM health check failed: ${invocation.Status}`);
 }
 
+const feedUrl = 'https://ostro.ws/honeyprinter/api/events';
+type Feed = {items: {id: number; destination_port: number; bytes_in: number; observed_at_ms: number}[]; cursor: number; has_more: boolean};
+async function readFeed(after?: number): Promise<Feed> {
+  const response = await fetch(feedUrl + (after === undefined ? '' : `?after=${after}`), {signal: AbortSignal.timeout(10_000), redirect: 'error'});
+  if (!response.ok) throw new Error(`Live feed returned HTTP ${response.status}`);
+  return response.json() as Promise<Feed>;
+}
+let cursor = (await readFeed()).cursor;
+const observedAfter = Date.now() - 2000;
+const smokeRequest = `GET / HTTP/1.1\r\nHost: honeyprinter\r\nX-Honeyprinter-Smoke: ${process.env.GITHUB_RUN_ID}-${'v'.repeat(997)}\r\nConnection: close\r\n\r\n`;
 await Promise.all([
   probe(ip, 22, '', 'SSH-2.0-'),
-  probe(ip, 80, 'GET / HTTP/1.1\r\nHost: honeyprinter\r\nConnection: close\r\n\r\n', 'HTTP/1.1'),
+  probe(ip, 80, smokeRequest, 'HTTP/1.1'),
   probe(ip, 443, 'GET / HTTP/1.1\r\nHost: honeyprinter\r\nConnection: close\r\n\r\n', 'HTTP/1.1', true),
   probe(ip, 6379, '*1\r\n$4\r\nPING\r\n', '+PONG'),
 ]);
+const feedDeadline = Date.now() + 45_000;
+let delivered = false;
+while (Date.now() < feedDeadline) {
+  const feed = await readFeed(cursor);
+  delivered = feed.items.some(event => event.destination_port === 80
+    && event.bytes_in === Buffer.byteLength(smokeRequest) && event.observed_at_ms >= observedAfter);
+  if (delivered) break;
+  cursor = feed.cursor;
+  if (!feed.has_more) await delay(2000);
+}
+if (!delivered) throw new Error('Public HTTP probe did not reach the Cloudflare live feed');
+console.log('Verified public probe -> Rust batch uploader -> Cloudflare Worker -> D1 -> live feed');
 if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(process.env.GITHUB_STEP_SUMMARY,
     `Deployed commit \`${process.env.GITHUB_SHA}\` to \`${instanceId}\` in Oregon.\n\n`
     + `Public IP: **${ip}**\n\nSHA-256: \`${digest}\`\n\n`
-    + `Verified service, binary checksum, ${ports.length} listeners, and public SSH/HTTP/HTTPS/Redis decoys. Mock queue enabled.\n`);
+    + `Verified service, binary checksum, ${ports.length} listeners, and public SSH/HTTP/HTTPS/Redis decoys. Cloudflare delivery enabled.\n`);
 }

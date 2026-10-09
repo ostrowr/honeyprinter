@@ -2,6 +2,7 @@ import {execFileSync} from 'node:child_process';
 import {mkdtempSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {verifyCloud} from './verify-cloud.ts';
 
 if (process.env.GITHUB_ACTIONS !== 'true') throw new Error('Deployments run in GitHub Actions only. Push to main or use workflow_dispatch.');
 for (const name of ['CLOUDFLARE_API_TOKEN', 'HONEYPRINTER_INGEST_TOKEN']) {
@@ -17,6 +18,7 @@ try {
   run('d1', 'migrations', 'apply', 'honeyprinter', '--remote');
   // Upload secrets with the version so the first public deployment is authenticated.
   run('deploy', '--secrets-file', file);
+  await verifyCloud(process.env.HONEYPRINTER_INGEST_TOKEN!);
 } finally {
   rmSync(directory, {recursive: true, force: true});
 }
