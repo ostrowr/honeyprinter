@@ -17,6 +17,14 @@ run "ci_is_separate_from_administration" {
     error_message = "Only this repository's immutable identity on main may deploy."
   }
   assert {
+    condition = length([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement : statement if statement.Sid == "CreateInsideTaggedVpc"]) == 1 && alltrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement :
+      statement.Condition.StringEquals["aws:ResourceTag/Project"] == "honeyprinter" &&
+      toset(statement.Action) == toset(["ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup"])
+      if statement.Sid == "CreateInsideTaggedVpc"
+    ])
+    error_message = "Creating a child resource must authorize the existing tagged VPC separately."
+  }
+  assert {
     condition = alltrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement :
       alltrue([for action in flatten([statement.Action]) :
         !startswith(action, "iam:") || contains(["iam:GetInstanceProfile", "iam:ListInstanceProfileTags", "iam:PassRole"], action)

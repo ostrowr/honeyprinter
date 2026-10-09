@@ -146,6 +146,13 @@ resource "aws_iam_role_policy" "deploy" {
         Condition = { StringEquals = { "aws:RequestTag/Project" = "honeyprinter" } }
       },
       {
+        # Parent VPC authorization uses existing resource tags, not request tags.
+        Sid       = "CreateInsideTaggedVpc", Effect = "Allow"
+        Action    = ["ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup"]
+        Resource  = "${local.ec2_prefix}:vpc/*"
+        Condition = { StringEquals = { "aws:ResourceTag/Project" = "honeyprinter" } }
+      },
+      {
         Sid = "ManageTaggedNetwork", Effect = "Allow"
         Action = [
           "ec2:ModifyVpcAttribute", "ec2:DeleteVpc", "ec2:ModifySubnetAttribute", "ec2:DeleteSubnet",
