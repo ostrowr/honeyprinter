@@ -106,7 +106,7 @@ async function feed(url: URL, env: Env, receipts = false) {
 }
 
 async function flushPrints(env: Env) {
-  const rows = (await env.DB.prepare('SELECT id, payload FROM receipts WHERE enqueued_at_ms IS NULL ORDER BY id LIMIT 50').all<{id: number; payload: string}>()).results;
+  const rows = (await env.DB.prepare('SELECT id, payload FROM receipts WHERE enqueued_at_ms IS NULL AND probe_count > 0 ORDER BY id LIMIT 50').all<{id: number; payload: string}>()).results;
   for (const row of rows) {
     // Send before marking: a crash may redeliver, but never silently lose a job.
     await env.PRINT_QUEUE.send(JSON.parse(row.payload), {contentType: 'json'});
@@ -114,18 +114,22 @@ async function flushPrints(env: Env) {
   }
 }
 
-export async function tick(env: Env) {
+export async function tick(env: Env, scheduledTime = Date.now()) {
   const now = Date.now();
+  const minute = Math.floor(scheduledTime / 60_000) * 60_000;
   const token = crypto.randomUUID();
   const lock = await env.DB.prepare('UPDATE summary_state SET lease_token = ?, lease_until_ms = ? WHERE id = 1 AND lease_until_ms < ? RETURNING last_event_id, last_receipt_ms')
     .bind(token, now + 300_000, now).first<{last_event_id: number; last_receipt_ms: number}>();
   if (!lock) return;
   try {
     await flushPrints(env);
-    if (now - lock.last_receipt_ms < 60_000) return;
+    // Cron delivery can jitter. Compare scheduled minutes so a slightly early
+    // invocation does not skip a whole minute, and retries cannot print twice.
+    if (minute <= Math.floor(lock.last_receipt_ms / 60_000) * 60_000) return;
     const end = await env.DB.prepare('SELECT MAX(id) AS id FROM events').first<{id: number | null}>();
-    if (end?.id && end.id > lock.last_event_id) {
-      const from = lock.last_event_id, to = end.id;
+    const from = lock.last_event_id, to = Math.max(from, end?.id ?? 0);
+    let counts: Counts = {probes: 0, sources: 0, first_ms: minute - 60_000, last_ms: minute, services: [], outcomes: [], samples: []};
+    if (to > from) {
       const range = 'id > ? AND id <= ?';
       const [total, services, outcomes, examples] = await env.DB.batch([
         env.DB.prepare(`SELECT COUNT(*) AS probes, COUNT(DISTINCT source_ip) AS sources, MIN(observed_at_ms) AS first_ms, MAX(observed_at_ms) AS last_ms FROM events WHERE ${range}`).bind(from, to),
@@ -133,20 +137,21 @@ export async function tick(env: Env) {
         env.DB.prepare(`SELECT outcome, COUNT(*) AS count FROM events WHERE ${range} GROUP BY outcome ORDER BY count DESC`).bind(from, to),
         env.DB.prepare(`SELECT id, received_at_ms, payload FROM events WHERE ${range} ORDER BY id LIMIT 8`).bind(from, to),
       ]);
-      const counts = {...total.results[0] as Record<string, unknown>, services: services.results, outcomes: outcomes.results,
+      counts = {...total.results[0] as Record<string, unknown>, services: services.results, outcomes: outcomes.results,
         samples: (examples.results as unknown as EventRow[]).map(publicEvent)} as Counts;
-      const summary = await summarize(counts, env);
-      const receipt: Receipt = {schema_version: 1, type: 'receipt', receipt_id: `receipt-${to}`, created_at_ms: now,
-        first_event_id: from + 1, last_event_id: to, counts, summary,
-        summarizer: env.SUMMARY_MODE === 'mock' ? 'mock' : env.OPENAI_MODEL};
-      // Both statements commit together. The lease token fences off an expired invocation.
-      await env.DB.batch([
-        env.DB.prepare('INSERT INTO receipts (receipt_id, created_at_ms, first_event_id, last_event_id, probe_count, payload) SELECT ?, ?, ?, ?, ?, ? FROM summary_state WHERE id = 1 AND lease_token = ?')
-          .bind(receipt.receipt_id, now, from + 1, to, counts.probes, JSON.stringify(receipt), token),
-        env.DB.prepare('UPDATE summary_state SET last_event_id = ?, last_receipt_ms = ? WHERE id = 1 AND lease_token = ?').bind(to, now, token),
-      ]);
-      await flushPrints(env);
     }
+    const quiet = counts.probes === 0;
+    const summary = quiet ? {title: 'All quiet', body: 'No new connections recorded. Another quiet minute on the internet.', highlights: []} : await summarize(counts, env);
+    const receipt: Receipt = {schema_version: 1, type: 'receipt', receipt_id: quiet ? `quiet-${minute}` : `receipt-${to}`, created_at_ms: now,
+      first_event_id: quiet ? from : from + 1, last_event_id: to, counts, summary,
+      summarizer: quiet ? 'quiet' : env.SUMMARY_MODE === 'mock' ? 'mock' : env.OPENAI_MODEL};
+    // Both statements commit together. The lease token fences off an expired invocation.
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO receipts (receipt_id, created_at_ms, first_event_id, last_event_id, probe_count, payload) SELECT ?, ?, ?, ?, ?, ? FROM summary_state WHERE id = 1 AND lease_token = ?')
+        .bind(receipt.receipt_id, now, receipt.first_event_id, to, counts.probes, JSON.stringify(receipt), token),
+      env.DB.prepare('UPDATE summary_state SET last_event_id = ?, last_receipt_ms = ? WHERE id = 1 AND lease_token = ?').bind(to, minute, token),
+    ]);
+    await flushPrints(env);
     // Bound each cleanup pass. Never delete events waiting to be summarized or receipts waiting to enqueue.
     const cutoff = now - Math.max(1, Number(env.RETENTION_DAYS) || 7) * 86_400_000;
     const oldest = await env.DB.prepare('SELECT received_at_ms FROM events ORDER BY id LIMIT 1').first<{received_at_ms: number}>();
@@ -155,7 +160,7 @@ export async function tick(env: Env) {
     }
     const oldestReceipt = await env.DB.prepare('SELECT created_at_ms FROM receipts ORDER BY id LIMIT 1').first<{created_at_ms: number}>();
     if (oldestReceipt && oldestReceipt.created_at_ms < cutoff) {
-      await env.DB.prepare('DELETE FROM receipts WHERE id IN (SELECT id FROM (SELECT id, created_at_ms, enqueued_at_ms FROM receipts ORDER BY id LIMIT 100) WHERE created_at_ms < ? AND enqueued_at_ms IS NOT NULL)').bind(cutoff).run();
+      await env.DB.prepare('DELETE FROM receipts WHERE id IN (SELECT id FROM (SELECT id, created_at_ms, enqueued_at_ms, probe_count FROM receipts ORDER BY id LIMIT 100) WHERE created_at_ms < ? AND (enqueued_at_ms IS NOT NULL OR probe_count = 0))').bind(cutoff).run();
     }
   } finally {
     await env.DB.prepare('UPDATE summary_state SET lease_token = NULL, lease_until_ms = 0 WHERE id = 1 AND lease_token = ?').bind(token).run();
@@ -186,5 +191,5 @@ export default {
       return json({error: 'Temporarily unavailable'}, 503);
     }
   },
-  async scheduled(_event: ScheduledController, env: Env): Promise<void> { await tick(env); },
+  async scheduled(event: ScheduledController, env: Env): Promise<void> { await tick(env, event.scheduledTime); },
 } satisfies ExportedHandler<Env>;

@@ -121,7 +121,7 @@ function receiptText(receipt: ReceiptRecord) {
   article.append(row('CONNECTIONS', receipt.counts.probes, true), row('SOURCES', receipt.counts.sources));
   article.append(node('p', receipt.summary.body, 'receipt-summary'));
   for (const highlight of receipt.summary.highlights) article.append(node('p', highlight));
-  article.append(node('p', receipt.summarizer === 'mock' ? 'Mock summary · recorded observations' : `Summary by ${receipt.summarizer}`, 'receipt-model'));
+  article.append(node('p', receipt.summarizer === 'quiet' ? 'Quiet minute · recorded observations' : receipt.summarizer === 'mock' ? 'Mock summary · recorded observations' : `Summary by ${receipt.summarizer}`, 'receipt-model'));
   return article;
 }
 
@@ -130,7 +130,7 @@ function renderDrawer() {
   if (drawerView === 'receipt') {
     $('drawer-title').textContent = 'On the paper';
     const receipt = currentReceipt();
-    body.replaceChildren(receipt ? receiptText(receipt) : node('p', 'Paper loaded. The first receipt will arrive after a connection is recorded.', 'empty'));
+    body.replaceChildren(receipt ? receiptText(receipt) : node('p', 'Paper loaded. The next minute report will arrive shortly.', 'empty'));
   } else if (drawerView === 'log') {
     $('drawer-title').textContent = 'Connection log';
     const note = node('p', 'The latest 100 recorded connections. Excess traffic may be dropped.', 'drawer-note');
@@ -143,9 +143,9 @@ function renderDrawer() {
   } else {
     $('drawer-title').textContent = 'A small internet appliance';
     const copy = node('div', '', 'drawer-copy');
-    copy.append(node('p', 'Honeyprinter is a tiny honeypot with a lot of open ports. It greets incoming connections, records the exchange, and turns each active minute into a receipt.'));
+    copy.append(node('p', 'Honeyprinter is a tiny honeypot with a lot of open ports. It greets incoming connections, records the exchange, and turns each minute into a receipt, including a short report when the wire is quiet.'));
     copy.append(node('span', 'The paper', 'label'), node('p', 'New receipts feed through the printer automatically. Drag the loose paper, retract to older receipts or advance with the arrows, or press Feed paper to replay the current one. Replaying here does not send a physical print.'));
-    copy.append(node('span', 'The real machine', 'label'), node('p', 'A Raspberry Pi will deliver the same receipts to a thermal printer. Until then, this is its digital counterpart.'));
+    copy.append(node('span', 'The real machine', 'label'), node('p', 'A Raspberry Pi will deliver the reports with traffic to a thermal printer. Quiet-minute reports appear here only.'));
     const link = node('a', 'Made by Robbie Ostrow ↗'); link.href = '/'; copy.append(link);
     body.replaceChildren(copy);
   }

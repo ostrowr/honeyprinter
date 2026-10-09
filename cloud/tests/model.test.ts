@@ -106,7 +106,7 @@ test('deployment with no OpenAI key fails before invoking Wrangler', () => {
   assert.throws(() => execFileSync(process.execPath, ['scripts/deploy.ts'], {
     cwd: new URL('..', import.meta.url),
     env: {...process.env, GITHUB_ACTIONS: 'true', CLOUDFLARE_API_TOKEN: 'test-only',
-      HONEYPRINTER_INGEST_TOKEN: 'test-only', OPENAI_API_KEY: '', PATH: ''},
+      HONEYPRINTER_INGEST_TOKEN: 'test-only', OPENAI_API_KEY: '', SUMMARY_MODE: 'openai', PATH: ''},
     stdio: 'pipe', timeout: 5000,
   }), (error: unknown) => {
     assert.match(String((error as {stderr: Buffer}).stderr), /Missing GitHub Actions secret: OPENAI_API_KEY/);

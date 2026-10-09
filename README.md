@@ -8,9 +8,9 @@ The Rust listener sends bounded batches to a TypeScript Cloudflare Worker at mos
 once per second. Uploads use a small in-memory buffer; excess or failed batches
 are dropped. No local database or retry backlog is needed on EC2. The Worker
 stores individual probes in D1, serves a live page
-at `/honeyprinter/`, and makes one receipt per active minute. Receipts are saved in
-D1 and sent to a Cloudflare HTTP-pull queue for the Pi. Production summaries use
-GPT-6 Luna; local development uses deterministic mock text. The Pi currently
+at `/honeyprinter/`, and makes one receipt per scheduled minute, including quiet minutes. Receipts are saved in
+D1; reports with traffic also go to a Cloudflare HTTP-pull queue for the Pi. Production summaries use
+GPT-6 Luna when its API key is configured; otherwise they use deterministic mock text. The Pi currently
 renders receipts to stdout; the physical printer driver comes later.
 
 The private repository is [ostrowr/honeyprinter](https://github.com/ostrowr/honeyprinter).
@@ -42,11 +42,12 @@ Open `http://localhost:8787/honeyprinter/` and probe the decoy as shown below.
 Wrangler's local cron can be triggered with:
 
 ```sh
-curl 'http://localhost:8787/__scheduled?cron=*+*+*+*+*'
+curl 'http://localhost:8787/cdn-cgi/local/scheduled?cron=*+*+*+*+*&format=json'
 ```
 
 This endpoint exists only in Wrangler development mode. It still enforces the
-60-second receipt interval. Local tests never call OpenAI or publish real jobs.
+one-report-per-scheduled-minute limit; append `&time=<unix-milliseconds>` to test a
+specific minute. Local tests never call OpenAI or publish real jobs.
 
 ## Browser scene
 
@@ -83,7 +84,8 @@ The production cloud resources are:
 2. Set `HONEYPRINTER_INGEST_TOKEN` to 32 random bytes encoded as 64 hexadecimal
    characters in Actions secrets. The EC2 workflow installs the same credential
    on the honeypot automatically. Do not commit a real `.env` file.
-3. Add `OPENAI_API_KEY` in Actions secrets with access to `gpt-6-luna`.
+3. To enable Luna, add `OPENAI_API_KEY` in Actions secrets with access to `gpt-6-luna`.
+   Without this key, CI deploys mock summaries.
 4. Set repository Actions variable `CLOUDFLARE_DEPLOY_ENABLED` to `true`.
 5. Push to `main` or run **Test and deploy** with `workflow_dispatch`.
 
@@ -94,9 +96,9 @@ then publishes the Worker, assets, secrets, minute cron and
 `ostro.ws/honeyprinter*` route. Other website paths keep their existing routing.
 `cloud/scripts/deploy.ts` refuses to deploy outside GitHub Actions.
 
-Production uses `SUMMARY_MODE=openai` in `cloud/wrangler.jsonc`. CI requires
-`OPENAI_API_KEY` and tests a real Luna response before applying migrations or
-publishing. This check creates no stored receipt or queue message. The deployment
+CI selects `SUMMARY_MODE=openai` when `OPENAI_API_KEY` is present, and `mock`
+otherwise. In OpenAI mode it tests a real Luna response before applying migrations
+or publishing. This check creates no stored receipt or queue message. The deployment
 check also verifies the live mode and model. `npm run dev` explicitly overrides
 the mode to `mock`, so local development needs no API key.
 The Responses API uses `gpt-6-luna`, no reasoning tokens, a 400-token output cap,
@@ -127,11 +129,16 @@ saves the receipt and advances its cursor. Receipt rows double as a durable
 queue outbox: a failed send retries later. A crash after sending can duplicate a
 queue message, so the Pi deduplicates by `receipt_id`. A delayed cron summarizes
 the accumulated backlog together; there is no promise of a clock-exact minute.
-The cron and Pi both enforce a minimum 60 seconds between receipts/output.
+The cron uses the scheduled UTC minute to avoid skipped reports when invocations
+arrive slightly early. Repeated or older triggers cannot create another report
+for the same minute. The Pi enforces at least 60 seconds between physical prints.
+Quiet minutes produce a stored, deterministic report for the webpage without an
+OpenAI call or queue message. Their event bounds both equal the last consumed
+event cursor, and they do not advance that cursor.
 
-Default retention is seven days for summarized events and enqueued receipts.
+Default retention is seven days for summarized events, quiet reports, and enqueued receipts.
 Cleanup checks the oldest row and removes bounded chunks, avoiding full-table
-scans every minute. Unsummarized events and unqueued receipts are preserved even
+scans every minute. Unsummarized events and traffic receipts waiting to enqueue are preserved even
 past retention. The public API serves at most 100 rows per request. Queue
 retention is separately controlled by Cloudflare; delivery after that expiry is
 not guaranteed. Retained D1 receipts are available for manual replay. UUID

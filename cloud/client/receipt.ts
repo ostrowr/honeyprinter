@@ -16,7 +16,7 @@ export function drawReceipt(ctx: CanvasRenderingContext2D, receipt: ReceiptRecor
     rule(64);
     if (!receipt) {
       ctx.font = `600 12px ${MONO}`;
-      ['PAPER LOADED', '', 'Waiting for a connection.', '', 'One receipt per minute.', 'A record of who stopped by.'].forEach((line, i) => ctx.fillText(line, PAPER_WIDTH / 2, 112 + i * 21));
+      ['PAPER LOADED', '', 'Waiting for the next minute.', '', 'One receipt per minute.', 'A record of who stopped by.'].forEach((line, i) => ctx.fillText(line, PAPER_WIDTH / 2, 112 + i * 21));
       rule(271);
       ctx.font = `600 10px ${MONO}`; ctx.fillText('NO TRAFFIC RECORDED YET', PAPER_WIDTH / 2, 294);
     } else {
@@ -42,7 +42,7 @@ export function drawReceipt(ctx: CanvasRenderingContext2D, receipt: ReceiptRecor
       const lines = wrapText(ctx, receipt.summary.body, PAPER_WIDTH - 40, 4);
       lines.forEach((line, i) => ctx.fillText(line, 20, 274 + i * 17));
       ctx.font = `600 10px ${MONO}`; ctx.fillStyle = '#303629'; ctx.textAlign = 'center';
-      ctx.fillText(receipt.summarizer === 'mock' ? 'MOCK SUMMARY' : 'AI SUMMARY', PAPER_WIDTH / 2, 344);
+      ctx.fillText(receipt.summarizer === 'quiet' ? 'QUIET MINUTE' : receipt.summarizer === 'mock' ? 'MOCK SUMMARY' : 'AI SUMMARY', PAPER_WIDTH / 2, 344);
     }
     // Perforation between receipts; all marks stay attached to the moving paper.
     ctx.fillStyle = '#b9b7aa';
