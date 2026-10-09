@@ -1,14 +1,12 @@
 import {ReceiptScene} from './scene.ts';
 import {element} from './dom.ts';
 import {activityPanel} from './activity.ts';
-import {reportCountdown} from './countdown.ts';
 import type {Activity, Feed, FeedItems, PublicEvent, ReceiptRecord} from '../shared/api.ts';
 
 const elements = {
   'scene': element('scene', 'canvas'),
   'machine-state': element('machine-state', 'span'),
   'open-activity': element('open-activity', 'button'),
-  'report-countdown': element('report-countdown', 'div'),
   'scene-fallback': element('scene-fallback', 'div'),
   'paper-hint': element('paper-hint', 'div'),
   'motion': element('motion', 'button'),
@@ -41,16 +39,16 @@ let eventCursor: number | undefined, receiptCursor: number | undefined, selected
 let drawerView: 'receipt' | 'log' | 'about' | 'activity' | undefined;
 let events: PublicEvent[] = [], receipts: ReceiptRecord[] = [], motionPaused = reducedMotion.matches;
 let scene: ReceiptScene | undefined;
-let connected = false, serverOffset = 0, latestMinute: number | undefined;
+const feedState: Record<keyof FeedItems, 'connecting' | 'live' | 'offline'> = {events:'connecting', receipts:'connecting'};
 let activity: Activity | undefined, activityLoading = false, activityFailed = false, activityAttempt = 0;
 
-function updateCountdown() {
-  const countdown = reportCountdown(Date.now() + serverOffset, latestMinute, connected);
-  scene?.setCountdown(countdown);
-  const text = countdown.phase === 'countdown' ? `Next report in ${countdown.seconds} seconds` : countdown.phase === 'preparing' ? 'Preparing the next minute report' : 'Reconnecting to the report feed';
-  $('report-countdown').textContent = text;
-  // Also useful when WebGL is unavailable, with no second-by-second announcements.
-  $('receipt-date').title = text;
+function updateConnection() {
+  const live = feedState.events === 'live' && feedState.receipts === 'live';
+  const offline = feedState.events === 'offline' || feedState.receipts === 'offline';
+  $('connection').textContent = live ? 'Live feed' : offline ? 'Reconnecting' : 'Connecting';
+  $('connection').title = live ? `Last checked ${time(Date.now())}` : 'Waiting for the live feed. Saved receipts remain available.';
+  $('connection-dot').classList.toggle('offline', !live);
+  scene?.setConnected(feedState.receipts === 'live');
 }
 
 async function loadActivity() {
@@ -170,7 +168,7 @@ function renderDrawer() {
     $('drawer-title').textContent = 'A small internet appliance';
     const copy = node('div', '', 'drawer-copy');
     copy.append(node('p', 'Honeyprinter is a tiny honeypot with a lot of open ports. It greets incoming connections, records the exchange, and turns each minute into a receipt, including a short report when the wire is quiet.'));
-    copy.append(node('span', 'The paper', 'label'), node('p', 'New receipts feed through the printer automatically. Drag the loose paper, retract to older receipts or advance with the arrows. The small display counts down to the next minute; its light warms while a report is being prepared.'));
+    copy.append(node('span', 'The paper', 'label'), node('p', 'New receipts feed through the printer automatically. Drag the loose paper, retract to older receipts or advance with the arrows. The status light glows steadily between reports and flickers gently as the paper moves.'));
     copy.append(node('span', 'The real machine', 'label'), node('p', 'A Raspberry Pi will deliver the reports with traffic to a thermal printer. Quiet-minute reports appear here only.'));
     const link = node('a', 'Made by Robbie Ostrow ↗'); link.href = '/'; copy.append(link);
     body.replaceChildren(copy);
@@ -196,43 +194,44 @@ async function fetchFeed<K extends keyof FeedItems>(name: K, after?: number): Pr
   return response.json();
 }
 
-async function poll() {
+function receiveEvents(page: Feed<PublicEvent>) {
+  const firstLoad = eventCursor === undefined;
+  events = [...events, ...page.items].slice(-100); eventCursor = page.cursor;
+  renderTelemetry(page.items.length > 0 && !firstLoad);
+}
+
+function receiveReceipts(page: Feed<ReceiptRecord>) {
+  const atLatest = !receipts.length || selectedReceipt === receipts.at(-1)?.id;
+  const firstLoad = receiptCursor === undefined;
+  receipts = [...receipts, ...page.items].slice(-100); receiptCursor = page.cursor;
+  $('mode').textContent = page.mode === 'mock' ? 'Mock summaries' : 'AI summaries';
+  if ($('drawer').open && drawerView === 'activity') void loadActivity();
+  if (page.items.length && (atLatest || !currentReceipt())) {
+    if (firstLoad) {
+      // Existing receipts are already printed. Only subsequent arrivals feed paper.
+      const previous = receipts.at(-2);
+      if (previous) scene?.showReceipt(previous, false);
+    }
+    const latest = receipts.at(-1);
+    if (latest) selectReceipt(latest.id, !firstLoad);
+  } else renderReceiptControls();
+}
+
+// Each feed renders as soon as it arrives and retries independently. A slow or
+// unavailable connection log must never hold up the printer's first receipt.
+async function poll<K extends keyof FeedItems>(name: K, cursor: () => number | undefined, receive: (page: Feed<FeedItems[K]>) => void) {
   let delay = 5000;
   try {
-    const [eventPage, receiptPage] = await Promise.all([fetchFeed('events', eventCursor), fetchFeed('receipts', receiptCursor)]);
-    connected = true;
-    serverOffset = receiptPage.server_time_ms - Date.now();
-    const newest = receiptPage.items.at(-1);
-    if (newest) latestMinute = newest.scheduled_at_ms ?? Math.floor(newest.created_at_ms / 60_000) * 60_000;
-    updateCountdown();
-    if ($('drawer').open && drawerView === 'activity') void loadActivity();
-    const atLatest = !receipts.length || selectedReceipt === receipts.at(-1)?.id;
-    const firstLoad = receiptCursor === undefined;
-    events = [...events, ...eventPage.items].slice(-100); eventCursor = eventPage.cursor;
-    receipts = [...receipts, ...receiptPage.items].slice(-100); receiptCursor = receiptPage.cursor;
-    $('mode').textContent = receiptPage.mode === 'mock' ? 'Mock summaries' : 'AI summaries';
-    $('connection').textContent = 'Live feed';
-    $('connection').title = `Last checked ${time(Date.now())}`;
-    $('connection-dot').classList.remove('offline');
-    renderTelemetry(eventPage.items.length > 0 && !firstLoad);
-    if (receiptPage.items.length && (atLatest || !currentReceipt())) {
-      if (firstLoad) {
-        // Put the preceding receipt on the back of the strip, then print the latest.
-        const previous = receipts.at(-2);
-        if (previous) scene?.showReceipt(previous, false);
-      }
-      const latest = receipts.at(-1);
-      if (latest) selectReceipt(latest.id);
-    } else renderReceiptControls();
-    if (eventPage.has_more || receiptPage.has_more) delay = 250;
+    const page = await fetchFeed(name, cursor());
+    receive(page);
+    feedState[name] = 'live';
+    if (page.has_more) delay = 250;
   } catch {
-    connected = false; updateCountdown();
-    $('connection').textContent = 'Reconnecting';
-    $('connection').title = 'The feed is unavailable. Retrying shortly.';
-    $('connection-dot').classList.add('offline');
+    feedState[name] = 'offline';
     delay = 10000;
   }
-  setTimeout(poll, delay);
+  updateConnection();
+  setTimeout(() => void poll(name, cursor, receive), delay);
 }
-setInterval(updateCountdown, 1000);
-poll();
+void poll('events', () => eventCursor, receiveEvents);
+void poll('receipts', () => receiptCursor, receiveReceipts);

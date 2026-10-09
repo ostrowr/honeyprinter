@@ -6,7 +6,6 @@ import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {Paper, ROWS, COLS, WIDTH, LENGTH} from './paper.ts';
 import {drawReceipt} from './receipt.ts';
 import {PaperRoll, PAGE_HEIGHT} from './roll.ts';
-import type {Countdown} from './countdown.ts';
 
 const clamp = THREE.MathUtils.clamp;
 
@@ -30,9 +29,7 @@ export class ReceiptScene {
   private direction: number;
   private readonly paper: Paper;
   private contextLost = false;
-  private countdown?: Countdown;
-  private displayCanvas!: HTMLCanvasElement;
-  private displayTexture!: THREE.CanvasTexture;
+  private connected = false;
   // Created synchronously by the setup methods called in the constructor.
   private environment!: THREE.WebGLRenderTarget;
   private printer!: THREE.Group;
@@ -167,22 +164,12 @@ export class ReceiptScene {
     }
     const teethGeo = new THREE.BufferGeometry(); teethGeo.setAttribute('position', new THREE.Float32BufferAttribute(teeth,3)); teethGeo.computeVertexNormals();
     const blade = new THREE.Mesh(teethGeo, new THREE.MeshStandardMaterial({color:0xbcc0b4,metalness:.8,roughness:.4,side:THREE.DoubleSide})); this.printer.add(blade);
-    // A restrained LCD in the fascia, readable without floating UI over the paper.
-    box([1.04,.42,.035], [1.03,1.015,1.4], rubber, .035);
-    this.displayCanvas = document.createElement('canvas');
-    this.displayCanvas.width = 384; this.displayCanvas.height = 144;
-    this.displayTexture = new THREE.CanvasTexture(this.displayCanvas);
-    this.displayTexture.colorSpace = THREE.SRGBColorSpace;
-    this.displayTexture.minFilter = THREE.LinearFilter;
-    const display = new THREE.Mesh(new THREE.PlaneGeometry(.94,.35), new THREE.MeshBasicMaterial({map:this.displayTexture}));
-    display.position.set(1.03,1.015,1.42); this.printer.add(display);
-    this.ledMaterial = new THREE.MeshStandardMaterial({color:0xa9bd79, emissive:0xa7c76e, emissiveIntensity:.35, roughness:.25});
+    this.ledMaterial = new THREE.MeshStandardMaterial({color:0xa58c60, emissive:0x977d50, emissiveIntensity:.08, roughness:.25});
     box([.12,.017,.12],[1.32,1.765,.78],rubber,.04);
     const led = new THREE.Mesh(new THREE.SphereGeometry(.037,16,12),this.ledMaterial);
     led.scale.y=.35; led.position.set(1.32,1.78,.78); this.printer.add(led);
     const statusLabel = makeLabel(128,40,ctx => {ctx.fillStyle='#929c84';ctx.font='20px monospace';ctx.fillText('STATUS',12,26);},.30,.095);
     statusLabel.rotation.x=-Math.PI/2;statusLabel.position.set(1.32,1.768,1.0);this.printer.add(statusLabel);
-    this.setCountdown({phase:'connecting',label:'CONNECTING',value:'—',seconds:0,progress:0});
     for (let i=0;i<9;i++) box([.014,.35,.045],[1.824,.79,-.85+i*.105],rubber,.007);
     box([.07,.25,.45],[1.826,1.39,.44],seam,.025);
     // Connector and soft cable resting on the same surface as the feet.
@@ -309,20 +296,11 @@ export class ReceiptScene {
     this.rebuildAtlas();this.requestFrame();
   }
 
-  setCountdown(countdown: Countdown) {
-    if (this.countdown?.phase === countdown.phase && this.countdown.value === countdown.value) return;
-    this.countdown = countdown;
-    const ctx = context2d(this.displayCanvas), offline = countdown.phase === 'offline' || countdown.phase === 'connecting';
-    ctx.fillStyle = '#252e26'; ctx.fillRect(0,0,384,144);
-    ctx.fillStyle = offline ? '#7c8972' : '#afbca0';
-    ctx.font = '19px monospace'; ctx.textAlign = 'center'; ctx.fillText(countdown.label,192,32);
-    ctx.font = countdown.phase === 'countdown' ? '52px monospace' : '27px monospace';
-    ctx.fillText(countdown.value,192,93);
-    ctx.fillStyle = '#424d3f'; ctx.fillRect(36,118,312,3);
-    ctx.fillStyle = countdown.phase === 'preparing' ? '#b59b74' : '#91a380';
-    ctx.fillRect(36,118,312*countdown.progress,3);
-    this.displayTexture.needsUpdate = true;
-    this.ledMaterial.emissive.setHex(offline ? 0x586052 : countdown.phase === 'preparing' ? 0xc5a16b : 0xa7c76e);
+  setConnected(connected: boolean) {
+    if (this.connected === connected) return;
+    this.connected = connected;
+    this.ledMaterial.color.setHex(connected ? 0xa9bd79 : 0xa58c60);
+    this.ledMaterial.emissive.setHex(connected ? 0xa7c76e : 0x977d50);
     this.requestFrame();
   }
 
@@ -356,10 +334,7 @@ export class ReceiptScene {
       if(previousDirection!==this.direction)this.onMotion(this.direction);
       this.updatePaper();
     }
-    const waiting = this.countdown?.phase === 'preparing';
-    const soon = this.countdown?.phase === 'countdown' && this.countdown.seconds <= 10;
-    const offline = !this.countdown || this.countdown.phase === 'offline' || this.countdown.phase === 'connecting';
-    this.ledMaterial.emissiveIntensity = offline ? .08 : !this.paused && (waiting || soon || this.direction !== 0) ? .4 + .15 * Math.sin(this.time * (this.direction !== 0 ? 8 : 3)) : .32;
+    this.ledMaterial.emissiveIntensity = !this.connected ? .08 : !this.paused && this.direction !== 0 ? .4 + .15 * Math.sin(this.time * 8) : .32;
     this.roller.rotation.x=-this.position/.047;
     this.renderer.render(this.world,this.camera);
     if(!this.paused)this.requestFrame();
