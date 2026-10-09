@@ -22,5 +22,8 @@
   },
   "overrides": {
     "sharp": "^0.35.5"
+  },
+  "dependencies": {
+    "jose": "^6.2.12"
   }
 }

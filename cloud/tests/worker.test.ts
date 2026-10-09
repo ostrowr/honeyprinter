@@ -4,8 +4,15 @@ import {readFile, readdir} from 'node:fs/promises';
 import {build} from 'esbuild';
 import {Miniflare, convertV4MiniflareOptions} from 'miniflare';
 import {randomUUID} from 'node:crypto';
+import {generateKeyPair, exportJWK, SignJWT} from 'jose';
+import {ACCESS_ISSUER, SITE_ORIGIN, API_ORIGIN} from '../shared/urls.ts';
 import type {Activity, Feed, FeedItems, Probe, Receipt} from '../shared/api.ts';
 
+const accessKey = await generateKeyPair('RS256');
+const publicKey = {...await exportJWK(accessKey.publicKey),kid:'test',alg:'RS256'};
+const accessToken = (changes: {email?:string;issuer?:string;audience?:string;expires?:string} = {}) => new SignJWT({email:changes.email ?? 'ostrowr@gmail.com'})
+  .setProtectedHeader({alg:'RS256',kid:'test'}).setIssuedAt().setExpirationTime(changes.expires ?? '1h')
+  .setIssuer(changes.issuer ?? ACCESS_ISSUER).setAudience(changes.audience ?? 'test-aud').sign(accessKey.privateKey);
 let mf: Miniflare;
 let db: Awaited<ReturnType<Miniflare['getD1Database']>>;
 
@@ -24,7 +31,7 @@ const tick = (fail = false, time?: number) => mf.dispatchFetch(`https://example.
 
 before(async () => {
   const {outputFiles} = await build({entryPoints: ['tests/fixtures/worker.ts'], bundle:true, write:false, format:'esm', platform:'neutral'});
-  mf = new Miniflare(convertV4MiniflareOptions({modules:true,script:outputFiles[0].text,compatibilityDate:'2026-10-08',d1Databases:{DB:'test-db'},bindings:{INGEST_TOKEN:'testing',SUMMARY_MODE:'mock',OPENAI_MODEL:'gpt-6-luna',RETENTION_DAYS:'7'},serviceBindings:{ASSETS:()=>new Response('<html>test</html>')}}));
+  mf = new Miniflare(convertV4MiniflareOptions({modules:true,script:outputFiles[0].text,compatibilityDate:'2026-10-08',d1Databases:{DB:'test-db'},bindings:{INGEST_TOKEN:'testing',SUMMARY_MODE:'mock',OPENAI_MODEL:'gpt-6-luna',RETENTION_DAYS:'7',ACCESS_AUD:'test-aud',ACCESS_EMAIL:'ostrowr@gmail.com'},serviceBindings:{ASSETS:request=>new Response('<html>test</html>',{headers:{'X-Test-Asset-Path':new URL(request.url).pathname}})},outboundService:request=>{ if(request.url !== `${ACCESS_ISSUER}/cdn-cgi/access/certs`) throw new Error('Unexpected outbound request'); return Response.json({keys:[publicKey]}); }}));
   db = await mf.getD1Database('DB');
   const directory = new URL('../migrations/', import.meta.url);
   for (const file of (await readdir(directory)).filter(file => file.endsWith('.sql')).sort()) {
@@ -265,4 +272,53 @@ test('24-hour activity counts all probes by port, expires old minutes and avoids
   assert.equal((await read()).probes, 129);
   assert.equal((await first<{n:number}>(`SELECT COUNT(*) AS n FROM activity_minutes WHERE minute_ms < ${from}`)).n, 0);
   assert.equal((await first<{last_event_id:number}>('SELECT last_event_id FROM summary_state')).last_event_id, state.last_event_id);
+});
+
+
+test('custom website hosts require a valid owner Access session for pages and assets', async () => {
+  for (const host of ['honeyprinter.com','www.honeyprinter.com']) for (const path of ['/','/build/app.js']) {
+    assert.equal((await mf.dispatchFetch(`https://${host}${path}`)).status,403);
+    assert.equal((await mf.dispatchFetch(`https://${host}${path}`, {headers:{'Cf-Access-Jwt-Assertion':'forged','Cf-Access-Authenticated-User-Email':'ostrowr@gmail.com'}})).status,403);
+  }
+  for (const changes of [{email:'someone@example.com'},{issuer:'https://other.cloudflareaccess.com'},{audience:'other-app'},{expires:'-1h'}]) {
+    assert.equal((await mf.dispatchFetch(SITE_ORIGIN, {headers:{'Cf-Access-Jwt-Assertion':await accessToken(changes)}})).status,403);
+  }
+  const valid = await accessToken();
+  const parts = valid.split('.'); parts[1] = btoa(JSON.stringify({email:'ostrowr@gmail.com',aud:'test-aud',iss:ACCESS_ISSUER,exp:9999999999,iat:1})).replace(/=/g,'').replaceAll('+','-').replaceAll('/','_');
+  assert.equal((await mf.dispatchFetch(SITE_ORIGIN,{headers:{'Cf-Access-Jwt-Assertion':parts.join('.')}})).status,403);
+  const headers = {'Cf-Access-Jwt-Assertion':valid};
+  for (const path of ['/','/style.css','/build/app.js']) {
+    const response = await mf.dispatchFetch(SITE_ORIGIN + path,{headers});
+    assert.equal(response.status,200);
+    assert.equal(response.headers.get('X-Test-Asset-Path'),path);
+    assert.match(response.headers.get('Content-Security-Policy') ?? '',/connect-src 'self' https:\/\/api\.honeyprinter\.com/);
+    assert.equal(response.headers.get('X-Robots-Tag'),'noindex, nofollow');
+  }
+  const www = await mf.dispatchFetch('https://www.honeyprinter.com/?receipt=12',{headers,redirect:'manual'});
+  assert.equal(www.status,308); assert.equal(www.headers.get('Location'),`${SITE_ORIGIN}/?receipt=12`);
+  assert.equal((await mf.dispatchFetch(`${SITE_ORIGIN}/api/events`,{headers})).status,404);
+  assert.equal((await mf.dispatchFetch(`${base}/`)).status,200,'the existing public page remains available');
+});
+
+test('API hostname serves the same data with restricted CORS and authenticated ingestion', async () => {
+  for (const path of ['/events','/receipts','/activity','/status']) {
+    const response = await mf.dispatchFetch(API_ORIGIN + path,{headers:{Origin:SITE_ORIGIN}});
+    assert.equal(response.status,200);
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'),SITE_ORIGIN);
+    assert.equal(response.headers.get('Access-Control-Allow-Credentials'),null);
+    assert.equal(response.headers.get('Vary'),'Origin');
+    const old = await mf.dispatchFetch(`${base}/api${path}`);
+    const current = await response.json() as Record<string,unknown>, previous = await old.json() as Record<string,unknown>;
+    delete current.server_time_ms; delete previous.server_time_ms;
+    assert.deepEqual(current,previous);
+  }
+  assert.equal((await mf.dispatchFetch(API_ORIGIN + '/events',{headers:{Origin:'https://evil.example'}})).headers.get('Access-Control-Allow-Origin'),null);
+  assert.equal((await mf.dispatchFetch(API_ORIGIN + '/events',{headers:{Origin:'https://ostro.ws'}})).headers.get('Access-Control-Allow-Origin'),'https://ostro.ws');
+  const preflight = await mf.dispatchFetch(API_ORIGIN + '/events',{method:'OPTIONS',headers:{Origin:SITE_ORIGIN,'Access-Control-Request-Method':'GET'}});
+  assert.equal(preflight.status,204); assert.equal(preflight.headers.get('Access-Control-Allow-Origin'),SITE_ORIGIN);
+  assert.equal((await mf.dispatchFetch(API_ORIGIN + '/events',{method:'OPTIONS',headers:{Origin:'https://evil.example','Access-Control-Request-Method':'GET'}})).status,403);
+  assert.equal((await mf.dispatchFetch(API_ORIGIN + '/probes',{method:'OPTIONS',headers:{Origin:SITE_ORIGIN,'Access-Control-Request-Method':'POST'}})).status,403);
+  assert.equal((await mf.dispatchFetch(API_ORIGIN + '/probes',{method:'POST'})).status,401);
+  assert.equal((await mf.dispatchFetch(API_ORIGIN + '/probes',{method:'POST',headers:{Authorization:'Bearer testing','Content-Type':'application/json'},body:'{}'})).status,400);
+  for (const path of ['/','/build/app.js','/honeyprinter/','/api/events']) assert.equal((await mf.dispatchFetch(API_ORIGIN + path)).status,404);
 });

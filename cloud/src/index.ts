@@ -1,8 +1,10 @@
 import {summarize} from './model.ts';
+import {hasAccess, type AccessEnv} from './access.ts';
+import {SITE_HOST, WWW_HOST, API_HOST, SITE_ORIGIN, API_ORIGIN, LEGACY_BASE} from '../shared/urls.ts';
 import {readActivity, refreshActivity} from './activity.ts';
 import type {Counts, Feed, Probe, PublicEvent, Receipt, ReceiptRecord} from '../shared/api.ts';
 
-export interface Env {
+export interface Env extends AccessEnv {
   DB: D1Database;
   ASSETS: Fetcher;
   PRINT_QUEUE: Pick<Queue<Receipt>, 'send'>;
@@ -13,7 +15,7 @@ export interface Env {
   RETENTION_DAYS: string;
 }
 interface EventRow {id: number; received_at_ms: number; payload: string}
-const BASE = '/honeyprinter';
+const BASE = LEGACY_BASE;
 const json = (value: unknown, status = 200) => Response.json(value, {status, headers: {'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'}});
 const integer = (v: unknown, max = Number.MAX_SAFE_INTEGER) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= max;
 const label = (v: unknown) => typeof v === 'string' && /^[a-z0-9_-]{1,40}$/.test(v);
@@ -177,30 +179,64 @@ export async function tick(env: Env, scheduledTime = Date.now()) {
   }
 }
 
+const readPaths = new Set(['/events', '/receipts', '/activity', '/status']);
+const browserOrigins = new Set([SITE_ORIGIN, 'https://ostro.ws']);
+
+function cors(response: Response, origin: string | null): Response {
+  const headers = new Headers(response.headers);
+  headers.set('Vary', 'Origin');
+  if (origin && browserOrigins.has(origin)) headers.set('Access-Control-Allow-Origin', origin);
+  return new Response(response.body, {status: response.status, headers});
+}
+
+async function api(request: Request, env: Env, url: URL, path: string): Promise<Response> {
+  if (path === '/probes' && request.method === 'POST') return ingest(request, env);
+  if (request.method === 'OPTIONS') {
+    const origin = request.headers.get('Origin');
+    const method = request.headers.get('Access-Control-Request-Method');
+    if (!readPaths.has(path) || !origin || !browserOrigins.has(origin) || !['GET','HEAD'].includes(method ?? '') || request.headers.has('Access-Control-Request-Headers')) return json({error:'Preflight not allowed'},403);
+    return cors(new Response(null, {status:204, headers:{'Access-Control-Allow-Methods':'GET, HEAD', 'Access-Control-Max-Age':'600'}}),origin);
+  }
+  if (request.method !== 'GET' && request.method !== 'HEAD') return json({error:'Method not allowed'},405);
+  let response: Response;
+  if (path === '/events') response = await feed(url,env);
+  else if (path === '/receipts') response = await feed(url,env,true);
+  else if (path === '/activity') response = json(await readActivity(env.DB));
+  else if (path === '/status') response = json({mode:env.SUMMARY_MODE,model:env.SUMMARY_MODE === 'openai' ? env.OPENAI_MODEL : null,cadence_seconds:60,retention_days:Number(env.RETENTION_DAYS)});
+  else response = json({error:'Not found'},404);
+  return cors(response,request.headers.get('Origin'));
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
+    const privateSite = url.hostname === SITE_HOST || url.hostname === WWW_HOST;
     try {
-      if (path === `${BASE}/api/probes` && request.method === 'POST') return await ingest(request, env);
-      if (request.method !== 'GET' && request.method !== 'HEAD') return json({error: 'Method not allowed'}, 405);
-      if (path === `${BASE}/api/events`) return await feed(url, env);
-      if (path === `${BASE}/api/receipts`) return await feed(url, env, true);
-      if (path === `${BASE}/api/activity`) return json(await readActivity(env.DB));
-      if (path === `${BASE}/api/status`) return json({mode: env.SUMMARY_MODE, model: env.SUMMARY_MODE === 'openai' ? env.OPENAI_MODEL : null, cadence_seconds: 60, retention_days: Number(env.RETENTION_DAYS)});
-      if (path === BASE) return Response.redirect(`${url.origin}${BASE}/`, 308);
-      if (!path.startsWith(`${BASE}/`) || path.startsWith(`${BASE}/api/`)) return json({error: 'Not found'}, 404);
-      url.pathname = path.slice(BASE.length);
-      const asset = await env.ASSETS.fetch(new Request(url, request));
+      // Access is configured before the custom domains are deployed. Validate its
+      // signed session here as well, including every static asset on these hosts.
+      if (privateSite && !await hasAccess(request,env)) return json({error:'Cloudflare Access sign-in required'},403);
+      if (url.hostname === WWW_HOST) return Response.redirect(`${SITE_ORIGIN}${path}${url.search}`,308);
+      if (url.hostname === API_HOST) return await api(request,env,url,path);
+      if (!privateSite && path.startsWith(`${BASE}/api/`)) return await api(request,env,url,path.slice(`${BASE}/api`.length));
+      if (request.method !== 'GET' && request.method !== 'HEAD') return json({error:'Method not allowed'},405);
+      if (!privateSite) {
+        if (path === BASE) return Response.redirect(`${url.origin}${BASE}/`,308);
+        if (!path.startsWith(`${BASE}/`)) return json({error:'Not found'},404);
+        url.pathname = path.slice(BASE.length);
+      } else if (path === '/api' || path.startsWith('/api/')) return json({error:'Use api.honeyprinter.com'},404);
+      const asset = await env.ASSETS.fetch(new Request(url,request));
       const headers = new Headers(asset.headers);
-      headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");
-      headers.set('X-Content-Type-Options', 'nosniff');
-      headers.set('Referrer-Policy', 'no-referrer');
-      return new Response(asset.body, {status: asset.status, headers});
+      headers.set('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ${API_ORIGIN}; base-uri 'none'; frame-ancestors 'none'`);
+      headers.set('X-Content-Type-Options','nosniff');
+      headers.set('Referrer-Policy','no-referrer');
+      if (privateSite) headers.set('X-Robots-Tag','noindex, nofollow');
+      return new Response(asset.body,{status:asset.status,headers});
     } catch (error) {
-      console.error('Honeyprinter request failed', error instanceof Error ? error.message : 'Unknown error');
-      return json({error: 'Temporarily unavailable'}, 503);
+      console.error('Honeyprinter request failed',error instanceof Error ? error.message : 'Unknown error');
+      const response = json({error:'Temporarily unavailable'},503);
+      return url.hostname === API_HOST ? cors(response,request.headers.get('Origin')) : response;
     }
   },
-  async scheduled(event: ScheduledController, env: Env): Promise<void> { await tick(env, event.scheduledTime); },
+  async scheduled(event: ScheduledController, env: Env): Promise<void> { await tick(env,event.scheduledTime); },
 } satisfies ExportedHandler<Env>;

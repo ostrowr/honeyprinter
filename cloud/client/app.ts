@@ -1,4 +1,5 @@
 import {ReceiptScene} from './scene.ts';
+import {SITE_HOST, API_ORIGIN} from '../shared/urls.ts';
 import {element} from './dom.ts';
 import {activityPanel} from './activity.ts';
 import type {Activity, Feed, FeedItems, PublicEvent, ReceiptRecord} from '../shared/api.ts';
@@ -31,7 +32,7 @@ const elements = {
   'about': element('about', 'button'),
 };
 const $ = <K extends keyof typeof elements>(id: K): (typeof elements)[K] => elements[id];
-const api = `${location.pathname.replace(/\/$/, '')}/api`;
+const api = location.hostname === SITE_HOST ? API_ORIGIN : `${location.pathname.replace(/\/$/, '')}/api`;
 const time = (ms: number) => new Date(ms).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
 const date = (ms: number) => new Date(ms).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');

@@ -73,6 +73,29 @@ and flickers gently while the paper moves. The receipt and connection feeds load
 and retry independently.
 Reduced-motion preferences and **Pause motion** stop the animation while keeping the feed live.
 
+## Domains and private preview
+
+`honeyprinter.com` serves the printer at `/`; `api.honeyprinter.com` serves
+`/events`, `/receipts`, `/activity`, `/status`, and authenticated `POST /probes`.
+The same Worker handles both domains and shares the existing D1 database, queue,
+and minute schedule. `www.honeyprinter.com` redirects to the main domain.
+The existing `ostro.ws/honeyprinter/` page and API remain available, so the EC2
+uploader does not need a simultaneous update.
+
+Cloudflare Access protects the apex and `www` hostnames with email one-time PIN
+login for `ostrowr@gmail.com`. The Worker also verifies the Access JWT signature,
+issuer, application audience, expiration, and email before serving these hosts.
+`ACCESS_AUD` and `ACCESS_EMAIL` are public configuration values, not secrets.
+Missing configuration fails closed. API reads remain public; browser CORS allows
+only the main site and `https://ostro.ws`. Ingestion still requires its bearer token.
+
+The Access application (`4387c25c-adf4-406a-8902-d93952ee6f17`) must exist before
+CI attaches the custom domains. It uses the existing `Only me` policy and the
+`ostrowr-github-io-pages.cloudflareaccess.com` team domain.
+Deployment verification checks that unauthenticated page and asset requests
+redirect to Cloudflare's login, checks both API addresses, and verifies ingestion
+authentication. Cloudflare manages the domains' DNS and certificates.
+
 ## Deploy through CI
 
 The production cloud resources are:
@@ -84,7 +107,7 @@ The production cloud resources are:
 | Queue `honeyprinter-print` (HTTP pull enabled) | `3c46c5b8e43643fabfbf54c02f17e02e` |
 
 1. Add `CLOUDFLARE_API_TOKEN` in the repository's Actions secrets. Scope it to this
-   account and `ostro.ws`: Account / Workers Scripts Edit, D1 Edit, Queues Edit,
+   account and the `ostro.ws` and `honeyprinter.com` zones: Account / Workers Scripts Edit, D1 Edit, Queues Edit,
    Account Settings Read; Zone / Workers Routes Edit and Zone Read.
 2. Set `HONEYPRINTER_INGEST_TOKEN` to 32 random bytes encoded as 64 hexadecimal
    characters in Actions secrets. The EC2 workflow installs the same credential
