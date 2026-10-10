@@ -1,3 +1,5 @@
+import {probeDetailLabels, type ProbeDetails} from '../shared/probe.ts';
+import type {ProbeEvent} from '../shared/api.ts';
 import {summarize} from './model.ts';
 import {hasAccess, type AccessEnv} from './access.ts';
 import {SITE_HOST, WWW_HOST, API_HOST, SITE_ORIGIN, API_ORIGIN, LEGACY_BASE} from '../shared/urls.ts';
@@ -81,12 +83,26 @@ async function ingest(request: Request, env: Env): Promise<Response> {
     : {event_id: probes[0].event_id, duplicate: result.meta.changes === 0}, result.meta.changes ? 201 : 200);
 }
 
-function publicEvent(row: EventRow): PublicEvent {
-  const p = JSON.parse(row.payload) as Probe;
-  // Expose the observed source address, while keeping raw protocol metadata private.
+function publicEvent(row: EventRow, p = JSON.parse(row.payload) as Probe): PublicEvent {
+  // Keep receipt samples compact; the connection feed adds protocol details.
   const source = p.source_ip;
   return {id: row.id, received_at_ms: row.received_at_ms, observed_at_ms: p.observed_at_ms, source,
     service: p.service, destination_port: p.destination_port, tls: p.tls, stage: p.stage, outcome: p.outcome, bytes_in: p.bytes_in};
+}
+
+function probeEvent(row: EventRow): ProbeEvent {
+  const p = JSON.parse(row.payload) as Probe;
+  const details: ProbeDetails = {};
+  for (const key of Object.keys(probeDetailLabels) as (keyof ProbeDetails)[]) {
+    const raw = p.details[key];
+    if (raw === undefined) continue;
+    // Treat scanner-provided values as bounded text, never markup or links.
+    let value = String(raw).replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0,320);
+    if (key === 'path') value = value.split(/[?#]/,1)[0];
+    if (value) details[key] = value;
+  }
+  return {...publicEvent(row,p), source_port:p.source_port, duration_ms:p.duration_ms,
+    bytes_out:p.bytes_out, details};
 }
 
 function cursor(url: URL): number | undefined | null {
@@ -104,7 +120,7 @@ async function feed(url: URL, env: Env, receipts = false) {
   const rows = after === undefined
     ? (await env.DB.prepare(`SELECT ${columns} FROM ${table} ORDER BY id DESC LIMIT 100`).all<EventRow>()).results.reverse()
     : (await env.DB.prepare(`SELECT ${columns} FROM ${table} WHERE id > ? ORDER BY id LIMIT 100`).bind(after).all<EventRow>()).results;
-  const items = receipts ? rows.map(r => ({...JSON.parse(r.payload) as Receipt, id: r.id})) : rows.map(publicEvent);
+  const items = receipts ? rows.map(r => ({...JSON.parse(r.payload) as Receipt, id: r.id})) : rows.map(probeEvent);
   return json({server_time_ms: Date.now(), items, cursor: rows.at(-1)?.id ?? after ?? 0, has_more: rows.length === 100, mode: env.SUMMARY_MODE} satisfies Feed<PublicEvent | ReceiptRecord>);
 }
 
@@ -141,7 +157,7 @@ export async function tick(env: Env, scheduledTime = Date.now()) {
         env.DB.prepare(`SELECT id, received_at_ms, payload FROM events WHERE ${range} ORDER BY id LIMIT 8`).bind(from, to),
       ]);
       counts = {...total.results[0] as Record<string, unknown>, services: services.results, outcomes: outcomes.results,
-        samples: (examples.results as unknown as EventRow[]).map(publicEvent)} as Counts;
+        samples: (examples.results as unknown as EventRow[]).map(row => publicEvent(row))} as Counts;
     }
     const quiet = counts.probes === 0;
     const summary = quiet ? {title: 'All quiet', body: 'No new connections recorded. Another quiet minute on the internet.', highlights: []} : await summarize(counts, env);

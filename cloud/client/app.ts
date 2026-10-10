@@ -2,7 +2,8 @@ import {ReceiptScene} from './scene.ts';
 import {SITE_HOST, API_ORIGIN} from '../shared/urls.ts';
 import {element} from './dom.ts';
 import {activityPanel} from './activity.ts';
-import type {Activity, Feed, FeedItems, PublicEvent, ReceiptRecord} from '../shared/api.ts';
+import {ProbeLog} from './probes.ts';
+import type {Activity, Feed, FeedItems, ProbeEvent, ReceiptRecord} from '../shared/api.ts';
 
 const elements = {
   'scene': element('scene', 'canvas'),
@@ -38,7 +39,8 @@ const date = (ms: number) => new Date(ms).toLocaleString([], {month: 'short', da
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let eventCursor: number | undefined, receiptCursor: number | undefined, selectedReceipt: number | undefined;
 let drawerView: 'receipt' | 'log' | 'about' | 'activity' | undefined;
-let events: PublicEvent[] = [], receipts: ReceiptRecord[] = [], motionPaused = reducedMotion.matches;
+const probeLog = new ProbeLog();
+let events: ProbeEvent[] = [], receipts: ReceiptRecord[] = [], motionPaused = reducedMotion.matches;
 let scene: ReceiptScene | undefined;
 const feedState: Record<keyof FeedItems, 'connecting' | 'live' | 'offline'> = {events:'connecting', receipts:'connecting'};
 let activity: Activity | undefined, activityLoading = false, activityFailed = false, activityAttempt = 0;
@@ -158,13 +160,8 @@ function renderDrawer() {
     body.replaceChildren(activityPanel(activity, activityFailed));
   } else if (drawerView === 'log') {
     $('drawer-title').textContent = 'Connection log';
-    const note = node('p', 'The latest 100 recorded connections. Excess traffic may be dropped.', 'drawer-note');
-    const rows = [...events].reverse().map(event => {
-      const row = node('div', '', 'event');
-      row.append(node('span', `${event.service.toUpperCase()} :${event.destination_port}${event.tls ? ' / TLS' : ''}`), node('time', time(event.observed_at_ms)), node('small', event.source), node('span', event.outcome.replaceAll('_', ' '), 'outcome'));
-      return row;
-    });
-    body.replaceChildren(note, ...(rows.length ? rows : [node('p', 'Quiet on the wire. New connections appear here as they arrive.', 'empty')]));
+    probeLog.update(events);
+    if (!body.contains(probeLog.element)) body.replaceChildren(probeLog.element);
   } else {
     $('drawer-title').textContent = 'A small internet appliance';
     const copy = node('div', '', 'drawer-copy');
@@ -195,7 +192,7 @@ async function fetchFeed<K extends keyof FeedItems>(name: K, after?: number): Pr
   return response.json();
 }
 
-function receiveEvents(page: Feed<PublicEvent>) {
+function receiveEvents(page: Feed<ProbeEvent>) {
   const firstLoad = eventCursor === undefined;
   events = [...events, ...page.items].slice(-100); eventCursor = page.cursor;
   renderTelemetry(page.items.length > 0 && !firstLoad);

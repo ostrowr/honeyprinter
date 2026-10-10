@@ -55,13 +55,13 @@ test('authentication, strict validation, bounded bodies and deduplication', asyn
   assert.equal((await mf.dispatchFetch(`${base}/api/events?after=1%20OR%201=1`)).status,400);
 });
 
-test('cursor pagination survives identical times, preserves IPv4/IPv6 addresses and excludes payload metadata', async () => {
+test('cursor pagination survives identical times and preserves IPv4/IPv6 addresses', async () => {
   for(let i=0;i<105;i++) assert.equal((await send(probe({observed_at_ms:1700000000000,source_ip:i===0?'2001:db8:1234:5678:90ab:cdef:1234:5678':'203.0.113.17'}))).status,201);
   let first=await get('events', '?after=0');
   assert.equal(first.items.length,100); assert.equal(first.has_more,true);
   assert.equal(first.items[0].source,'203.0.113.17');
   assert.equal(first.items[1].source,'2001:db8:1234:5678:90ab:cdef:1234:5678');
-  assert.equal('details' in first.items[0],false);
+  assert.equal(first.items[0].details.client_banner,'SSH-2.0-example');
   const second=await get('events', `?after=${first.cursor}`);
   assert.equal(second.items.length,6); assert.equal(second.has_more,false);
   assert.ok(second.items[0].id>first.cursor);
@@ -340,4 +340,22 @@ test('API hostname serves the same data with restricted CORS and authenticated i
   assert.equal((await mf.dispatchFetch(API_ORIGIN + '/probes',{method:'POST'})).status,401);
   assert.equal((await mf.dispatchFetch(API_ORIGIN + '/probes',{method:'POST',headers:{Authorization:'Bearer testing','Content-Type':'application/json'},body:'{}'})).status,400);
   for (const path of ['/','/build/app.js','/honeyprinter/','/api/events']) assert.equal((await mf.dispatchFetch(API_ORIGIN + path)).status,404);
+});
+
+test('probe feed exposes bounded protocol details and exchange metrics without publishing arbitrary metadata', async () => {
+  const p = probe({source_ip:'2001:db8::7',source_port:43123,destination_port:443,service:'https',tls:true,
+    duration_ms:1250,bytes_in:240,bytes_out:95,details:{method:'GET',path:'/.env?token=not-public#fragment',
+      host:'example.test', 'user-agent':'<img src=x onerror=alert(1)>',client_banner:'SSH-2.0-\u001bclient\u202e',
+      authorization:'not-public',password:'not-public',unknown_field:'not-public',tls_version:'TLSv1_3'}});
+  assert.equal((await send(p)).status,201);
+  const event = (await get('events')).items.at(-1)!;
+  assert.equal(event.source,p.source_ip); assert.equal(event.source_port,p.source_port);
+  assert.equal(event.duration_ms,1250); assert.equal(event.bytes_in,240); assert.equal(event.bytes_out,95);
+  assert.deepEqual(event.details,{method:'GET',path:'/.env',host:'example.test',
+    'user-agent':'<img src=x onerror=alert(1)>',client_banner:'SSH-2.0- client',tls_version:'TLSv1_3'});
+  assert.equal((await mf.dispatchFetch(API_ORIGIN + '/events')).status,200);
+  assert.equal(JSON.stringify(event).includes('not-public'),false);
+  await db.exec('UPDATE summary_state SET last_receipt_ms = 0'); await tick();
+  const receipt = (await get('receipts')).items.at(-1)!;
+  assert.equal(receipt.counts.samples.some(sample => 'details' in sample),false,'receipt samples stay compact');
 });

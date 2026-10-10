@@ -1,3 +1,5 @@
+import type {ProbeDetails} from './probe.ts';
+
 // Wire types shared by the Worker, browser, and integration tests.
 export interface Probe {
   schema_version: number; type: string; event_id: string; observed_at_ms: number;
@@ -18,6 +20,14 @@ export interface PublicEvent {
   stage: string;
   outcome: string;
   bytes_in: number;
+}
+
+// Detailed events are separate from the compact samples stored on receipts.
+export interface ProbeEvent extends PublicEvent {
+  source_port: number;
+  duration_ms: number;
+  bytes_out: number;
+  details: ProbeDetails;
 }
 
 export interface Summary {
@@ -62,7 +72,7 @@ export interface Feed<T> {
 }
 
 export interface FeedItems {
-  events: PublicEvent;
+  events: ProbeEvent;
   receipts: ReceiptRecord;
 }
 

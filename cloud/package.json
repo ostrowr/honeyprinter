@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --test-scheduled --var SUMMARY_MODE:mock",
+    "dev": "wrangler dev --local-upstream localhost --test-scheduled --var SUMMARY_MODE:mock",
     "check": "tsc --project tsconfig.json && tsc --project tsconfig.client.json && tsc --project tsconfig.node.json && npm run build:client",
     "test": "node --test tests/*.test.ts",
     "migrate:local": "wrangler d1 migrations apply honeyprinter --local",

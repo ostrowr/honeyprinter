@@ -70,7 +70,13 @@ subtle progress bar based on the latest report’s creation time. The bar holds
 at full if a report is late; there is no numeric countdown or preparing state.
 The status light glows steadily between reports
 and flickers gently while the paper moves. The receipt and connection feeds load
-and retry independently.
+and retry independently. Connection log entries expand to show source ports,
+precise observation times, duration, bytes in both directions, connection stage,
+and recognized protocol metadata (such as request paths, user agents, and SSH
+banners). New probes preserve expanded rows while the log updates. Protocol
+values are bounded text; arbitrary metadata and request query strings are not
+published. These details reuse existing event payloads, with no extra D1 query
+or schema migration. Receipt samples stay compact.
 Reduced-motion preferences and **Pause motion** stop the animation while keeping the feed live.
 
 ## Domains and private preview
