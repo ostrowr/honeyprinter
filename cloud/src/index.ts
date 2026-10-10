@@ -221,6 +221,9 @@ export default {
       if (!privateSite && path.startsWith(`${BASE}/api/`)) return await api(request,env,url,path.slice(`${BASE}/api`.length));
       if (request.method !== 'GET' && request.method !== 'HEAD') return json({error:'Method not allowed'},405);
       if (!privateSite) {
+        if (url.hostname === 'ostro.ws' && (path === BASE || path.startsWith(`${BASE}/`))) {
+          return Response.redirect(`${SITE_ORIGIN}${path.slice(BASE.length) || '/'}${url.search}`,308);
+        }
         if (path === BASE) return Response.redirect(`${url.origin}${BASE}/`,308);
         if (!path.startsWith(`${BASE}/`)) return json({error:'Not found'},404);
         url.pathname = path.slice(BASE.length);

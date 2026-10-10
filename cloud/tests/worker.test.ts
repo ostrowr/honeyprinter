@@ -297,7 +297,26 @@ test('custom website hosts require a valid owner Access session for pages and as
   const www = await mf.dispatchFetch('https://www.honeyprinter.com/?receipt=12',{headers,redirect:'manual'});
   assert.equal(www.status,308); assert.equal(www.headers.get('Location'),`${SITE_ORIGIN}/?receipt=12`);
   assert.equal((await mf.dispatchFetch(`${SITE_ORIGIN}/api/events`,{headers})).status,404);
-  assert.equal((await mf.dispatchFetch(`${base}/`)).status,200,'the existing public page remains available');
+  assert.equal((await mf.dispatchFetch(`${base}/`)).status,200,'development URLs still serve the page locally');
+});
+
+test('old website redirects to the private domain while its API stays in place', async () => {
+  const legacy = 'https://ostro.ws/honeyprinter';
+  for (const method of ['GET','HEAD']) {
+    for (const [path, destination] of [['','/'],['/','/'],['?receipt=12','/?receipt=12'],['/build/app.js?v=1','/build/app.js?v=1']]) {
+      const response = await mf.dispatchFetch(legacy + path,{method,redirect:'manual'});
+      assert.equal(response.status,308);
+      assert.equal(response.headers.get('Location'),SITE_ORIGIN + destination);
+    }
+  }
+  const status = await mf.dispatchFetch(legacy + '/api/status',{redirect:'manual'});
+  assert.equal(status.status,200);
+  assert.equal(status.headers.get('Location'),null);
+  const ingest = await mf.dispatchFetch(legacy + '/api/probes',{method:'POST',redirect:'manual',
+    headers:{Authorization:'Bearer testing','Content-Type':'application/json'},body:'{}'});
+  assert.equal(ingest.status,400,'existing uploaders reach validation without following a redirect');
+  assert.equal(ingest.headers.get('Location'),null);
+  assert.equal((await mf.dispatchFetch('https://ostro.ws/honeyprinter-other',{redirect:'manual'})).status,404);
 });
 
 test('API hostname serves the same data with restricted CORS and authenticated ingestion', async () => {

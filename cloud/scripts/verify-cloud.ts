@@ -15,8 +15,10 @@ export async function verifyCloud(token: string, expected: {SUMMARY_MODE: string
         const location = new URL(response.headers.get('Location') ?? '/',url);
         if (response.status !== 302 || location.origin !== ACCESS_ISSUER || !location.pathname.startsWith('/cdn-cgi/access/login/')) throw new Error(`Access login missing at ${url}`);
       }
-      const page = await request(legacy + '/');
-      if (!page.ok || !(await page.text()).includes('Honeyprinter')) throw new Error('Legacy page unavailable');
+      for (const [path, destination] of [['','/'],['/?receipt=12','/?receipt=12'],['/build/app.js','/build/app.js']]) {
+        const page = await request(legacy + path);
+        if (page.status !== 308 || page.headers.get('Location') !== SITE_ORIGIN + destination) throw new Error('Legacy website redirect missing');
+      }
       for (const base of [legacy + '/api',API_ORIGIN]) {
         const status = await request(base + '/status');
         const body = await status.json() as {cadence_seconds?:number;mode?:string;model?:string|null};
@@ -38,7 +40,7 @@ export async function verifyCloud(token: string, expected: {SUMMARY_MODE: string
           headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:'{}'});
         if (allowed.status !== 400) throw new Error('Ingest token check failed');
       }
-      console.log('Verified private custom domains, both APIs, CORS, and ingest authentication.');
+      console.log('Verified private custom domains, legacy website redirects, both APIs, CORS, and ingest authentication.');
       return;
     } catch (error) { lastError = error instanceof Error ? error.message : 'Verification failed'; }
     await delay(5000);

@@ -15,7 +15,7 @@ renders receipts to stdout; the physical printer driver comes later.
 
 The private repository is [ostrowr/honeyprinter](https://github.com/ostrowr/honeyprinter).
 **Worker deployments happen only in GitHub Actions**, after all checks pass. The
-live page is [ostro.ws/honeyprinter](https://ostro.ws/honeyprinter/).
+live page is [honeyprinter.com](https://honeyprinter.com/), behind Cloudflare Access.
 
 ## Whole system locally
 
@@ -79,8 +79,10 @@ Reduced-motion preferences and **Pause motion** stop the animation while keeping
 `/events`, `/receipts`, `/activity`, `/status`, and authenticated `POST /probes`.
 The same Worker handles both domains and shares the existing D1 database, queue,
 and minute schedule. `www.honeyprinter.com` redirects to the main domain.
-The existing `ostro.ws/honeyprinter/` page and API remain available, so the EC2
-uploader does not need a simultaneous update.
+The old `ostro.ws/honeyprinter/` website permanently redirects to the new domain,
+preserving paths and query strings. Its `/honeyprinter/api/*` endpoints remain
+available, so the EC2 uploader does not need a simultaneous update. Local development
+continues to serve the page at `/honeyprinter/`.
 
 Cloudflare Access protects the apex and `www` hostnames with email one-time PIN
 login for `ostrowr@gmail.com`. The Worker also verifies the Access JWT signature,
@@ -93,8 +95,8 @@ The Access application (`4387c25c-adf4-406a-8902-d93952ee6f17`) must exist befor
 CI attaches the custom domains. It uses the existing `Only me` policy and the
 `ostrowr-github-io-pages.cloudflareaccess.com` team domain.
 Deployment verification checks that unauthenticated page and asset requests
-redirect to Cloudflare's login, checks both API addresses, and verifies ingestion
-authentication. Cloudflare manages the domains' DNS and certificates.
+redirect to Cloudflare's login, verifies the old website's redirects, checks both
+API addresses, and verifies ingestion authentication. Cloudflare manages the domains' DNS and certificates.
 
 ## Deploy through CI
 
