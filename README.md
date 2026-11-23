@@ -8,13 +8,8 @@ The real printer is a **MUNBYN ITPP098P**.
 flowchart LR
   EC2[EC2 · Rust decoys] -->|probe batches| CF[Cloudflare · Worker + D1 + Queue]
   CF -->|queue pull| Pi[Raspberry Pi]
-  Pi -.->|USB planned| Printer[MUNBYN ITPP098P]
-  CF -->|receipt API| Mac[Mac · CUPS]
-  Mac -->|USB today| Printer
+  Pi --> Printer[MUNBYN ITPP098P]
 ```
-
-The printer currently runs through a Mac. The Pi consumer works with the queue
-and emits receipts to stdout; its physical printer adapter is still pending.
 
 [Printer setup](docs/printer.md) · [Listener setup](docs/listener.md) · [Website and cloud docs](docs/website.md)
 
