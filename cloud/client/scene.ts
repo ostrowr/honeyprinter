@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import {context2d, element} from './dom.ts';
+import {context2d} from './dom.ts';
 import type {ReceiptRecord} from '../shared/api.ts';
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
@@ -29,6 +29,7 @@ export class ReceiptScene {
   private direction: number;
   private readonly paper: Paper;
   private contextLost = false;
+  private compact = matchMedia('(max-width:650px), (max-height:500px) and (max-width:1000px)').matches;
   private connected = false;
   private displayState = '';
   private reportAgeMs = 0;
@@ -46,7 +47,7 @@ export class ReceiptScene {
     this.canvas = canvas;
     this.onMotion = onMotion;
     this.renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: true, powerPreference: 'low-power'});
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, this.compact ? 1.5 : 2));
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.VSMShadowMap;
@@ -92,7 +93,7 @@ export class ReceiptScene {
   setupLighting() {
     const room = new RoomEnvironment();
     const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.environment = pmrem.fromScene(room, .06);
+    this.environment = pmrem.fromScene(room, .06, .1, 100, {size: this.compact ? 128 : 256});
     this.world.environment = this.environment.texture;
     this.world.environmentIntensity = .38;
     room.dispose(); pmrem.dispose();
@@ -100,12 +101,13 @@ export class ReceiptScene {
     const key = new THREE.DirectionalLight(0xfff8e9, 3.2);
     key.position.set(-3.5, 8, 5);
     key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
+    const shadowSize = this.compact ? 512 : 1024;
+    key.shadow.mapSize.set(shadowSize, shadowSize);
     Object.assign(key.shadow.camera, {left: -6, right: 6, top: 7, bottom: -5, near: .1, far: 25});
     key.shadow.bias = -.00015;
     key.shadow.normalBias = .014;
     key.shadow.radius = 13;
-    key.shadow.blurSamples = 16;
+    key.shadow.blurSamples = this.compact ? 8 : 16;
     this.world.add(key);
     const fill = new THREE.DirectionalLight(0xdce6ee, .65);
     fill.position.set(5, 3, -4); this.world.add(fill);
@@ -244,6 +246,8 @@ export class ReceiptScene {
   resize() {
     const {width,height}=this.canvas.getBoundingClientRect();
     const mobile=matchMedia('(max-width:650px), (max-height:500px) and (max-width:1000px)').matches;
+    this.compact = mobile;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, mobile ? 1.5 : 2));
     this.renderer.setSize(width,height,false);
     const scale=Math.max(1,Math.min(width/(mobile?5.7:10.5),(height-(mobile?48:235))/5.5,105));
     const centerX=width*(mobile?.46:.53),groundY=mobile?height-42:height*.76-16;
@@ -300,7 +304,7 @@ export class ReceiptScene {
       this.dragOffset.copy(point).sub(hit.point);
       this.paper.grab={row,col,target:point.toArray()};
       canvas.setPointerCapture(event.pointerId);canvas.classList.add('grabbing');
-      element('paper-hint', 'div').classList.add('used');event.preventDefault();
+      event.preventDefault();
     });
     const release=()=>{this.paper.grab=null;canvas.classList.remove('grabbing');};
     canvas.addEventListener('pointerup',release);canvas.addEventListener('pointercancel',release);canvas.addEventListener('lostpointercapture',release);
@@ -364,8 +368,8 @@ export class ReceiptScene {
     this.frameId=0;
     if(document.hidden||this.contextLost)return;
     const dt=this.lastFrame?Math.min((timestamp-this.lastFrame)/1000,.05):1/60;
-    // Cap both physics and rendering at 60 Hz, including high-refresh displays.
-    if(!this.paused&&this.lastFrame&&dt<1/65){this.requestFrame();return;}
+    // Render at 30 Hz on phones; fixed-step paper physics still runs at 60 Hz.
+    if(!this.paused&&this.lastFrame&&dt<1/(this.compact?32:65)){this.requestFrame();return;}
     this.lastFrame=timestamp;
     if(!this.paused){
       this.accumulator+=dt;

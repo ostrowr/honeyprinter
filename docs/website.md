@@ -41,9 +41,10 @@ specific minute. Local tests never call OpenAI or publish real jobs.
 
 The printer is a Three.js scene with a constrained paper mesh. The scene and page
 controls are TypeScript in `cloud/client/`; HTML and CSS live in `cloud/public/`.
-Wrangler bundles `client/app.ts` into `public/build/app.js` automatically for development
-and CI. The bundle is generated and ignored by Git. All browser assets are served
-locally by the Worker.
+Wrangler builds `client/app.ts` into a small `public/build/app.js` entry point and
+a separate, dynamically loaded scene bundle. Data requests and page controls start
+before Three.js initializes; the scene then restores the current receipt selection.
+Generated bundles are ignored by Git. All browser assets are served by the Worker.
 
 `npm run check` strictly type-checks the Worker, browser, scripts, and tests using
 separate runtime configurations, then builds the browser bundle. API types live in
@@ -65,6 +66,10 @@ banners). New probes preserve expanded rows while the log updates. Protocol
 values are bounded text; arbitrary metadata and request query strings are not
 published. These details reuse existing event payloads, with no extra D1 query
 or schema migration. Receipt samples stay compact.
+On phones, the printer sits above compact history and log controls, with the real
+printer photo visible below them. The card uses a 17 KB WebP preview; opening it
+loads the original photo. Mobile rendering uses a lower pixel ratio, smaller
+lighting maps, and a 30 Hz frame cap while paper physics continues at 60 Hz.
 Reduced-motion preferences and **Pause motion** stop the animation while keeping the feed live.
 
 ## Domains and public website
