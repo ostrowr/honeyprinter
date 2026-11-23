@@ -92,6 +92,9 @@ available, so the EC2 uploader does not need a simultaneous update. Local develo
 continues to serve the page at `/honeyprinter/`.
 
 The website and its static assets are public without a Cloudflare Access login.
+The Cloudflare Access application `4387c25c-adf4-406a-8902-d93952ee6f17` has a
+`Honeyprinter public website` policy (Bypass / Everyone) scoped to the apex and
+`www` hostnames. The shared `Only me` policy still protects the separate Pages previews.
 API reads are also public; browser CORS allows only the main site and
 `https://ostro.ws`. Ingestion still requires its bearer token.
 
