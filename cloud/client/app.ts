@@ -166,7 +166,6 @@ function renderDrawer() {
     $('drawer-title').textContent = 'Help';
     const copy = node('div', '', 'drawer-copy');
     copy.append(node('p', 'Honeyprinter is a tiny honeypot with a lot of open ports. It greets incoming connections, records the exchange, and turns each minute into a receipt'));
-    const link = node('a', 'More projects'); link.href = 'https://ostro.ws/'; copy.append(link);
     body.replaceChildren(copy);
   }
 }
