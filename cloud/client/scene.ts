@@ -242,10 +242,11 @@ export class ReceiptScene {
   }
 
   resize() {
-    const {width,height}=this.canvas.getBoundingClientRect(),mobile=width<650;
+    const {width,height}=this.canvas.getBoundingClientRect();
+    const mobile=matchMedia('(max-width:650px), (max-height:500px) and (max-width:1000px)').matches;
     this.renderer.setSize(width,height,false);
-    const scale=Math.min(width/(mobile?5.7:10.5),(height-(mobile?285:235))/5.5,105);
-    const centerX=width*(mobile?.46:.53),groundY=mobile?height-277:height*.76-16;
+    const scale=Math.max(1,Math.min(width/(mobile?5.7:10.5),(height-(mobile?48:235))/5.5,105));
+    const centerX=width*(mobile?.46:.53),groundY=mobile?height-42:height*.76-16;
     const offsetX=(width/2-centerX)/scale,offsetY=(groundY-height/2)/scale;
     this.camera.left=-width/scale/2+offsetX;this.camera.right=width/scale/2+offsetX;
     this.camera.top=height/scale/2+offsetY;this.camera.bottom=-height/scale/2+offsetY;

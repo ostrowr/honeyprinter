@@ -10,8 +10,12 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, class
 
 export function activityPanel(activity: Activity | undefined, failed: boolean): HTMLElement {
   const panel = node('section', '', 'activity-panel');
+  const contact = node('p', '', 'activity-contact');
+  const email = node('a', 'robbie@ostro.ws'); email.href = 'mailto:robbie@ostro.ws';
+  contact.append('contact ', email, ' for a full data dump');
   if (!activity?.generated_at_ms) {
     panel.append(node('p', failed ? 'Traffic totals are unavailable. We’ll try again shortly.' : activity ? 'The first daily tally is being prepared. Check back after the next report.' : 'Loading the last 24 hours…', 'empty'));
+    panel.append(contact);
     return panel;
   }
   const stamp = new Date(activity.to_ms).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
@@ -57,5 +61,6 @@ export function activityPanel(activity: Activity | undefined, failed: boolean): 
     panel.append(outcomes);
   }
   panel.append(node('p', 'Recorded probes only. Excess traffic may be dropped.', 'drawer-note activity-footnote'));
+  panel.append(contact);
   return panel;
 }
