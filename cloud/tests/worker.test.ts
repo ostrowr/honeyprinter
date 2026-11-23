@@ -357,5 +357,24 @@ test('probe feed exposes bounded protocol details and exchange metrics without p
   assert.equal(JSON.stringify(event).includes('not-public'),false);
   await db.exec('UPDATE summary_state SET last_receipt_ms = 0'); await tick();
   const receipt = (await get('receipts')).items.at(-1)!;
-  assert.equal(receipt.counts.samples.some(sample => 'details' in sample),false,'receipt samples stay compact');
+  const sample = receipt.counts.samples.find(sample => sample.source === p.source_ip)!;
+  assert.equal(sample.details?.path,'/.env');
+  assert.equal(sample.details?.client_banner,'SSH-2.0- client');
+  assert.equal(sample.duration_ms,1250);
+  assert.equal(JSON.stringify(sample).includes('not-public'),false);
+  assert.equal('host' in sample.details!,false,'receipt details use a smaller allowlist');
+  assert.ok(Object.values(sample.details!).every(value => value!.length <= 160));
+  assert.ok(receipt.counts.ports?.some(port => port.port === 443 && port.service === 'https' && port.count === 1));
+});
+
+test('receipt port totals keep distinct ports while service totals combine them', async () => {
+  await db.exec('UPDATE summary_state SET last_receipt_ms = 0');
+  await send({schema_version:1,type:'probe_batch',events:[
+    probe({service:'http',destination_port:80}), probe({service:'http',destination_port:8080}),
+    probe({service:'http',destination_port:8080}),
+  ]});
+  await tick();
+  const receipt = (await get('receipts')).items.at(-1)!;
+  assert.deepEqual(receipt.counts.ports,[{port:8080,service:'http',count:2},{port:80,service:'http',count:1}]);
+  assert.deepEqual(receipt.counts.services,[{service:'http',count:3}]);
 });

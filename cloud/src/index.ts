@@ -4,7 +4,7 @@ import {summarize} from './model.ts';
 import {hasAccess, type AccessEnv} from './access.ts';
 import {SITE_HOST, WWW_HOST, API_HOST, SITE_ORIGIN, API_ORIGIN, LEGACY_BASE} from '../shared/urls.ts';
 import {readActivity, refreshActivity} from './activity.ts';
-import type {Counts, Feed, Probe, PublicEvent, Receipt, ReceiptRecord} from '../shared/api.ts';
+import type {Counts, Feed, Probe, PublicEvent, Receipt, ReceiptRecord, ReceiptSample} from '../shared/api.ts';
 
 export interface Env extends AccessEnv {
   DB: D1Database;
@@ -84,10 +84,20 @@ async function ingest(request: Request, env: Env): Promise<Response> {
 }
 
 function publicEvent(row: EventRow, p = JSON.parse(row.payload) as Probe): PublicEvent {
-  // Keep receipt samples compact; the connection feed adds protocol details.
   const source = p.source_ip;
   return {id: row.id, received_at_ms: row.received_at_ms, observed_at_ms: p.observed_at_ms, source,
     service: p.service, destination_port: p.destination_port, tls: p.tls, stage: p.stage, outcome: p.outcome, bytes_in: p.bytes_in};
+}
+
+function receiptSample(row: EventRow): ReceiptSample {
+  const event = probeEvent(row);
+  const details: ProbeDetails = {};
+  // Small, useful protocol observations; never request bodies or arbitrary metadata.
+  for (const key of ['method', 'path', 'client_banner', 'user-agent', 'commands', 'command', 'operation', 'action', 'sni', 'tls_version'] as const) {
+    if (event.details[key]) details[key] = event.details[key]!.slice(0, 160);
+    if (Object.keys(details).length === 6) break;
+  }
+  return {...event, details};
 }
 
 function probeEvent(row: EventRow): ProbeEvent {
@@ -147,17 +157,21 @@ export async function tick(env: Env, scheduledTime = Date.now()) {
     if (minute <= Math.floor(lock.last_receipt_ms / 60_000) * 60_000) return;
     const end = await env.DB.prepare('SELECT MAX(id) AS id FROM events').first<{id: number | null}>();
     const from = lock.last_event_id, to = Math.max(from, end?.id ?? 0);
-    let counts: Counts = {probes: 0, sources: 0, first_ms: minute - 60_000, last_ms: minute, services: [], outcomes: [], samples: []};
+    let counts: Counts = {probes: 0, sources: 0, first_ms: minute - 60_000, last_ms: minute, services: [], ports: [], outcomes: [], samples: []};
     if (to > from) {
       const range = 'id > ? AND id <= ?';
-      const [total, services, outcomes, examples] = await env.DB.batch([
+      const [total, ports, outcomes, examples] = await env.DB.batch([
         env.DB.prepare(`SELECT COUNT(*) AS probes, COUNT(DISTINCT source_ip) AS sources, MIN(observed_at_ms) AS first_ms, MAX(observed_at_ms) AS last_ms FROM events WHERE ${range}`).bind(from, to),
-        env.DB.prepare(`SELECT service, COUNT(*) AS count FROM events WHERE ${range} GROUP BY service ORDER BY count DESC`).bind(from, to),
+        env.DB.prepare(`SELECT json_extract(payload, '$.destination_port') AS port, service, COUNT(*) AS count FROM events WHERE ${range} GROUP BY port, service ORDER BY count DESC, port, service`).bind(from, to),
         env.DB.prepare(`SELECT outcome, COUNT(*) AS count FROM events WHERE ${range} GROUP BY outcome ORDER BY count DESC`).bind(from, to),
         env.DB.prepare(`SELECT id, received_at_ms, payload FROM events WHERE ${range} ORDER BY id LIMIT 8`).bind(from, to),
       ]);
-      counts = {...total.results[0] as Record<string, unknown>, services: services.results, outcomes: outcomes.results,
-        samples: (examples.results as unknown as EventRow[]).map(row => publicEvent(row))} as Counts;
+      const portCounts = ports.results as unknown as NonNullable<Counts['ports']>;
+      const byService = new Map<string, number>();
+      for (const row of portCounts) byService.set(row.service, (byService.get(row.service) ?? 0) + row.count);
+      const serviceCounts = [...byService].map(([service, count]) => ({service, count})).sort((a,b) => b.count-a.count || a.service.localeCompare(b.service));
+      counts = {...total.results[0] as Record<string, unknown>, services: serviceCounts, ports: portCounts, outcomes: outcomes.results,
+        samples: (examples.results as unknown as EventRow[]).map(receiptSample)} as Counts;
     }
     const quiet = counts.probes === 0;
     const summary = quiet ? {title: 'All quiet', body: 'No new connections recorded. Another quiet minute on the internet.', highlights: []} : await summarize(counts, env);

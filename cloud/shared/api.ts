@@ -36,14 +36,23 @@ export interface Summary {
   highlights: string[];
 }
 
+// Optional detail fields keep older queued receipts readable.
+export interface ReceiptSample extends PublicEvent {
+  source_port?: number;
+  duration_ms?: number;
+  bytes_out?: number;
+  details?: ProbeDetails;
+}
+
 export interface Counts {
   probes: number;
   sources: number;
   first_ms: number;
   last_ms: number;
   services: {service: string; count: number}[];
+  ports?: {port: number; service: string; count: number}[];
   outcomes: {outcome: string; count: number}[];
-  samples: PublicEvent[];
+  samples: ReceiptSample[];
 }
 
 export interface Receipt {

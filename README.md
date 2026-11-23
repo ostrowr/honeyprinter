@@ -11,7 +11,8 @@ stores individual probes in D1, serves a live page
 at `/honeyprinter/`, and makes one receipt per scheduled minute, including quiet minutes. Receipts are saved in
 D1; reports with traffic also go to a Cloudflare HTTP-pull queue for the Pi. Production summaries use
 GPT-6 Luna when its API key is configured; otherwise they use deterministic mock text. The Pi currently
-renders receipts to stdout; the physical printer driver comes later.
+renders receipts to stdout. A separate one-shot TypeScript command previews or
+prints a receipt through macOS/Linux CUPS to a USB ESC/POS printer.
 
 The private repository is [ostrowr/honeyprinter](https://github.com/ostrowr/honeyprinter).
 **Worker deployments happen only in GitHub Actions**, after all checks pass. The
@@ -141,8 +142,11 @@ The Responses API uses `gpt-6-luna`, no reasoning tokens, a 400-token output cap
 and a strict receipt schema. API errors, refusals, incomplete responses, and invalid
 receipts fail the attempt; the next cron retries the unsummarized events. Counts
 cover all events since the last successful summary; only eight sanitized examples
-are sent. Full source IPs are included in the public API and summary samples; raw
-protocol metadata is excluded from both. A failed API call does not advance the
+are sent. Full source IPs and bounded, recognized paths, client banners, commands,
+and user agents are included in summary samples. Request query strings, bodies,
+and arbitrary metadata are excluded. Port totals cover every recorded connection;
+Luna is instructed not to extrapolate sample frequencies or equate a completed
+decoy exchange with a compromise. A failed API call does not advance the
 event cursor. No API key means no OpenAI calls in mock mode.
 
 ## Storage, delivery and the page
@@ -203,6 +207,37 @@ that actually reached D1, so they may undercount heavy traffic. The uploader
 requires HTTPS except on localhost and never follows redirects with its token.
 
 ## Read the production receipt queue without a Pi
+
+### Preview or print one physical receipt
+
+The MUNBYN ITPP098P connected to this Mac is the CUPS printer `Printer_POS_80`.
+Use Node 24+ from the repository root:
+
+```sh
+# Preview the most recent traffic report, without touching the queue or printer:
+node cloud/scripts/print-receipt.ts --latest
+node cloud/scripts/print-receipt.ts --latest --output /tmp/honeyprinter-receipt.txt
+
+# Submit exactly one physical receipt when ready:
+node cloud/scripts/print-receipt.ts --latest --printer Printer_POS_80
+```
+
+`--file receipt.json` renders a saved receipt instead of fetching the public feed.
+`--timezone` defaults to `America/Los_Angeles`. The layout uses the printer's native
+48-column Font A, a larger masthead, exact port counts, summary text, and up to four
+distinct sampled probes including full IPs, paths, banners, and exchange metrics.
+Older receipts without port totals fall back to service counts. The preview can
+enrich older samples from retained events in that same receipt's event range;
+it only reconstructs port totals when every event in the range is available.
+All dynamic text is converted to printable ASCII before encoding ESC/POS.
+
+Preview is the default; `--printer` is required for physical output. A successful
+command means CUPS accepted one job, not proof that paper emerged. This command
+does not poll, install a background service, acknowledge queue messages, or enable
+minutely printing. Production Luna summaries are enabled separately by adding
+`OPENAI_API_KEY` to GitHub Actions and deploying through CI.
+
+### Read the queue to stdout
 
 From the repository root, using Node 24 and your existing Wrangler login:
 
