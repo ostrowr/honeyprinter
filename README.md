@@ -5,14 +5,12 @@ receipts with port counts, a short Luna summary, and a few sampled exchanges.
 The real printer is a **MUNBYN ITPP098P**.
 
 ```mermaid
-flowchart TD
-  Internet[Internet probes] --> EC2[EC2 · Rust protocol decoys]
-  EC2 -->|batches, at most once per second| CF[Cloudflare Worker + D1 · minute reports]
-  CF --> Queue[Cloudflare Queue]
-  Queue -->|pull| Pi[Raspberry Pi consumer]
-  Pi -.->|USB output planned| Printer[MUNBYN ITPP098P]
-  CF -->|current setup| Mac[Mac · CUPS]
-  Mac -->|USB| Printer
+flowchart LR
+  EC2[EC2 · Rust decoys] -->|probe batches| CF[Cloudflare · Worker + D1 + Queue]
+  CF -->|queue pull| Pi[Raspberry Pi]
+  Pi -.->|USB planned| Printer[MUNBYN ITPP098P]
+  CF -->|receipt API| Mac[Mac · CUPS]
+  Mac -->|USB today| Printer
 ```
 
 The printer currently runs through a Mac. The Pi consumer works with the queue
