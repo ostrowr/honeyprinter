@@ -9,6 +9,7 @@ flowchart LR
   EC2[EC2 · Rust decoys] -->|probe batches| CF[Cloudflare · Worker + D1 + Queue]
   CF -->|queue pull| Pi[Raspberry Pi]
   Pi --> Printer[MUNBYN ITPP098P]
+  CF -->|live feed| Web[Website · honeyprinter.com]
 ```
 
 [Printer setup](docs/printer.md) · [Listener setup](docs/listener.md) · [Website and cloud docs](docs/website.md)
