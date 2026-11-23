@@ -16,7 +16,7 @@ prints a receipt through macOS/Linux CUPS to a USB ESC/POS printer.
 
 The private repository is [ostrowr/honeyprinter](https://github.com/ostrowr/honeyprinter).
 **Worker deployments happen only in GitHub Actions**, after all checks pass. The
-live page is [honeyprinter.com](https://honeyprinter.com/), behind Cloudflare Access.
+public live page is [honeyprinter.com](https://honeyprinter.com/).
 
 ## Whole system locally
 
@@ -80,7 +80,7 @@ published. These details reuse existing event payloads, with no extra D1 query
 or schema migration. Receipt samples stay compact.
 Reduced-motion preferences and **Pause motion** stop the animation while keeping the feed live.
 
-## Domains and private preview
+## Domains and public website
 
 `honeyprinter.com` serves the printer at `/`; `api.honeyprinter.com` serves
 `/events`, `/receipts`, `/activity`, `/status`, and authenticated `POST /probes`.
@@ -91,19 +91,13 @@ preserving paths and query strings. Its `/honeyprinter/api/*` endpoints remain
 available, so the EC2 uploader does not need a simultaneous update. Local development
 continues to serve the page at `/honeyprinter/`.
 
-Cloudflare Access protects the apex and `www` hostnames with email one-time PIN
-login for `ostrowr@gmail.com`. The Worker also verifies the Access JWT signature,
-issuer, application audience, expiration, and email before serving these hosts.
-`ACCESS_AUD` and `ACCESS_EMAIL` are public configuration values, not secrets.
-Missing configuration fails closed. API reads remain public; browser CORS allows
-only the main site and `https://ostro.ws`. Ingestion still requires its bearer token.
+The website and its static assets are public without a Cloudflare Access login.
+API reads are also public; browser CORS allows only the main site and
+`https://ostro.ws`. Ingestion still requires its bearer token.
 
-The Access application (`4387c25c-adf4-406a-8902-d93952ee6f17`) must exist before
-CI attaches the custom domains. It uses the existing `Only me` policy and the
-`ostrowr-github-io-pages.cloudflareaccess.com` team domain.
-Deployment verification checks that unauthenticated page and asset requests
-redirect to Cloudflare's login, verifies the old website's redirects, checks both
-API addresses, and verifies ingestion authentication. Cloudflare manages the domains' DNS and certificates.
+Deployment verification checks unauthenticated pages and assets, the `www` and
+old website redirects, both API addresses, and ingestion authentication.
+Cloudflare manages the domains' DNS and certificates.
 
 ## Deploy through CI
 

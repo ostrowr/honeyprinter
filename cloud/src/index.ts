@@ -1,12 +1,11 @@
 import {probeDetailLabels, type ProbeDetails} from '../shared/probe.ts';
 import type {ProbeEvent} from '../shared/api.ts';
 import {summarize} from './model.ts';
-import {hasAccess, type AccessEnv} from './access.ts';
 import {SITE_HOST, WWW_HOST, API_HOST, SITE_ORIGIN, API_ORIGIN, LEGACY_BASE} from '../shared/urls.ts';
 import {readActivity, refreshActivity} from './activity.ts';
 import type {Counts, Feed, Probe, PublicEvent, Receipt, ReceiptRecord, ReceiptSample} from '../shared/api.ts';
 
-export interface Env extends AccessEnv {
+export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
   PRINT_QUEUE: Pick<Queue<Receipt>, 'send'>;
@@ -241,16 +240,13 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
-    const privateSite = url.hostname === SITE_HOST || url.hostname === WWW_HOST;
+    const siteHost = url.hostname === SITE_HOST || url.hostname === WWW_HOST;
     try {
-      // Access is configured before the custom domains are deployed. Validate its
-      // signed session here as well, including every static asset on these hosts.
-      if (privateSite && !await hasAccess(request,env)) return json({error:'Cloudflare Access sign-in required'},403);
       if (url.hostname === WWW_HOST) return Response.redirect(`${SITE_ORIGIN}${path}${url.search}`,308);
       if (url.hostname === API_HOST) return await api(request,env,url,path);
-      if (!privateSite && path.startsWith(`${BASE}/api/`)) return await api(request,env,url,path.slice(`${BASE}/api`.length));
+      if (!siteHost && path.startsWith(`${BASE}/api/`)) return await api(request,env,url,path.slice(`${BASE}/api`.length));
       if (request.method !== 'GET' && request.method !== 'HEAD') return json({error:'Method not allowed'},405);
-      if (!privateSite) {
+      if (!siteHost) {
         if (url.hostname === 'ostro.ws' && (path === BASE || path.startsWith(`${BASE}/`))) {
           return Response.redirect(`${SITE_ORIGIN}${path.slice(BASE.length) || '/'}${url.search}`,308);
         }
@@ -263,7 +259,6 @@ export default {
       headers.set('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ${API_ORIGIN}; base-uri 'none'; frame-ancestors 'none'`);
       headers.set('X-Content-Type-Options','nosniff');
       headers.set('Referrer-Policy','no-referrer');
-      if (privateSite) headers.set('X-Robots-Tag','noindex, nofollow');
       return new Response(asset.body,{status:asset.status,headers});
     } catch (error) {
       console.error('Honeyprinter request failed',error instanceof Error ? error.message : 'Unknown error');

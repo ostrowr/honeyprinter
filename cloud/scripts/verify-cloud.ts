@@ -1,5 +1,5 @@
 import {setTimeout as delay} from 'node:timers/promises';
-import {API_ORIGIN, SITE_ORIGIN, WWW_HOST, ACCESS_ISSUER, LEGACY_BASE} from '../shared/urls.ts';
+import {API_ORIGIN, SITE_ORIGIN, WWW_HOST, LEGACY_BASE} from '../shared/urls.ts';
 
 const legacy = `https://ostro.ws${LEGACY_BASE}`;
 export async function verifyCloud(token: string, expected: {SUMMARY_MODE: string; OPENAI_MODEL: string}): Promise<void> {
@@ -9,12 +9,16 @@ export async function verifyCloud(token: string, expected: {SUMMARY_MODE: string
   let lastError = '';
   do {
     try {
-      // Check the edge protection rather than giving CI a browser login bypass.
-      for (const url of [SITE_ORIGIN + '/',SITE_ORIGIN + '/build/app.js',`https://${WWW_HOST}/`]) {
-        const response = await request(url);
-        const location = new URL(response.headers.get('Location') ?? '/',url);
-        if (response.status !== 302 || location.origin !== ACCESS_ISSUER || !location.pathname.startsWith('/cdn-cgi/access/login/')) throw new Error(`Access login missing at ${url}`);
+      for (const [path, contentType] of [['/','text/html'],['/style.css','text/css'],['/build/app.js','javascript'],['/real-honeyprinter.jpg','image/jpeg']]) {
+        const response = await request(SITE_ORIGIN + path);
+        if (response.status !== 200 || !response.headers.get('Content-Type')?.includes(contentType)) throw new Error(`Public website unavailable at ${path}`);
+        if (response.headers.get('X-Robots-Tag')?.includes('noindex')) throw new Error('Website still marked private');
+        if (path === '/') {
+          if (!(await response.text()).includes('for a full data dump')) throw new Error('Footer contact missing');
+        } else await response.body?.cancel();
       }
+      const www = await request(`https://${WWW_HOST}/?receipt=12`);
+      if (www.status !== 308 || www.headers.get('Location') !== `${SITE_ORIGIN}/?receipt=12`) throw new Error('WWW redirect missing');
       for (const [path, destination] of [['','/'],['/?receipt=12','/?receipt=12'],['/build/app.js','/build/app.js']]) {
         const page = await request(legacy + path);
         if (page.status !== 308 || page.headers.get('Location') !== SITE_ORIGIN + destination) throw new Error('Legacy website redirect missing');
@@ -40,7 +44,7 @@ export async function verifyCloud(token: string, expected: {SUMMARY_MODE: string
           headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:'{}'});
         if (allowed.status !== 400) throw new Error('Ingest token check failed');
       }
-      console.log('Verified private custom domains, legacy website redirects, both APIs, CORS, and ingest authentication.');
+      console.log('Verified public pages and assets, legacy website redirects, both APIs, CORS, and ingest authentication.');
       return;
     } catch (error) { lastError = error instanceof Error ? error.message : 'Verification failed'; }
     await delay(5000);

@@ -4,15 +4,9 @@ import {readFile, readdir} from 'node:fs/promises';
 import {build} from 'esbuild';
 import {Miniflare, convertV4MiniflareOptions} from 'miniflare';
 import {randomUUID} from 'node:crypto';
-import {generateKeyPair, exportJWK, SignJWT} from 'jose';
-import {ACCESS_ISSUER, SITE_ORIGIN, API_ORIGIN} from '../shared/urls.ts';
+import {SITE_ORIGIN, API_ORIGIN} from '../shared/urls.ts';
 import type {Activity, Feed, FeedItems, Probe, Receipt} from '../shared/api.ts';
 
-const accessKey = await generateKeyPair('RS256');
-const publicKey = {...await exportJWK(accessKey.publicKey),kid:'test',alg:'RS256'};
-const accessToken = (changes: {email?:string;issuer?:string;audience?:string;expires?:string} = {}) => new SignJWT({email:changes.email ?? 'ostrowr@gmail.com'})
-  .setProtectedHeader({alg:'RS256',kid:'test'}).setIssuedAt().setExpirationTime(changes.expires ?? '1h')
-  .setIssuer(changes.issuer ?? ACCESS_ISSUER).setAudience(changes.audience ?? 'test-aud').sign(accessKey.privateKey);
 let mf: Miniflare;
 let db: Awaited<ReturnType<Miniflare['getD1Database']>>;
 
@@ -31,7 +25,7 @@ const tick = (fail = false, time?: number) => mf.dispatchFetch(`https://example.
 
 before(async () => {
   const {outputFiles} = await build({entryPoints: ['tests/fixtures/worker.ts'], bundle:true, write:false, format:'esm', platform:'neutral'});
-  mf = new Miniflare(convertV4MiniflareOptions({modules:true,script:outputFiles[0].text,compatibilityDate:'2026-10-08',d1Databases:{DB:'test-db'},bindings:{INGEST_TOKEN:'testing',SUMMARY_MODE:'mock',OPENAI_MODEL:'gpt-6-luna',RETENTION_DAYS:'7',ACCESS_AUD:'test-aud',ACCESS_EMAIL:'ostrowr@gmail.com'},serviceBindings:{ASSETS:request=>new Response('<html>test</html>',{headers:{'X-Test-Asset-Path':new URL(request.url).pathname}})},outboundService:request=>{ if(request.url !== `${ACCESS_ISSUER}/cdn-cgi/access/certs`) throw new Error('Unexpected outbound request'); return Response.json({keys:[publicKey]}); }}));
+  mf = new Miniflare(convertV4MiniflareOptions({modules:true,script:outputFiles[0].text,compatibilityDate:'2026-10-08',d1Databases:{DB:'test-db'},bindings:{INGEST_TOKEN:'testing',SUMMARY_MODE:'mock',OPENAI_MODEL:'gpt-6-luna',RETENTION_DAYS:'7'},serviceBindings:{ASSETS:request=>new Response('<html>test</html>',{headers:{'X-Test-Asset-Path':new URL(request.url).pathname}})},outboundService:()=>{ throw new Error('Unexpected outbound request'); }}));
   db = await mf.getD1Database('DB');
   const directory = new URL('../migrations/', import.meta.url);
   for (const file of (await readdir(directory)).filter(file => file.endsWith('.sql')).sort()) {
@@ -275,32 +269,21 @@ test('24-hour activity counts all probes by port, expires old minutes and avoids
 });
 
 
-test('custom website hosts require a valid owner Access session for pages and assets', async () => {
-  for (const host of ['honeyprinter.com','www.honeyprinter.com']) for (const path of ['/','/build/app.js']) {
-    assert.equal((await mf.dispatchFetch(`https://${host}${path}`)).status,403);
-    assert.equal((await mf.dispatchFetch(`https://${host}${path}`, {headers:{'Cf-Access-Jwt-Assertion':'forged','Cf-Access-Authenticated-User-Email':'ostrowr@gmail.com'}})).status,403);
-  }
-  for (const changes of [{email:'someone@example.com'},{issuer:'https://other.cloudflareaccess.com'},{audience:'other-app'},{expires:'-1h'}]) {
-    assert.equal((await mf.dispatchFetch(SITE_ORIGIN, {headers:{'Cf-Access-Jwt-Assertion':await accessToken(changes)}})).status,403);
-  }
-  const valid = await accessToken();
-  const parts = valid.split('.'); parts[1] = btoa(JSON.stringify({email:'ostrowr@gmail.com',aud:'test-aud',iss:ACCESS_ISSUER,exp:9999999999,iat:1})).replace(/=/g,'').replaceAll('+','-').replaceAll('/','_');
-  assert.equal((await mf.dispatchFetch(SITE_ORIGIN,{headers:{'Cf-Access-Jwt-Assertion':parts.join('.')}})).status,403);
-  const headers = {'Cf-Access-Jwt-Assertion':valid};
-  for (const path of ['/','/style.css','/build/app.js']) {
-    const response = await mf.dispatchFetch(SITE_ORIGIN + path,{headers});
+test('website pages and assets are public without an Access session', async () => {
+  for (const method of ['GET','HEAD']) for (const path of ['/','/style.css','/build/app.js','/real-honeyprinter.jpg']) {
+    const response = await mf.dispatchFetch(SITE_ORIGIN + path,{method});
     assert.equal(response.status,200);
     assert.equal(response.headers.get('X-Test-Asset-Path'),path);
     assert.match(response.headers.get('Content-Security-Policy') ?? '',/connect-src 'self' https:\/\/api\.honeyprinter\.com/);
-    assert.equal(response.headers.get('X-Robots-Tag'),'noindex, nofollow');
+    assert.equal(response.headers.get('X-Robots-Tag'),null);
   }
-  const www = await mf.dispatchFetch('https://www.honeyprinter.com/?receipt=12',{headers,redirect:'manual'});
+  const www = await mf.dispatchFetch('https://www.honeyprinter.com/?receipt=12',{redirect:'manual'});
   assert.equal(www.status,308); assert.equal(www.headers.get('Location'),`${SITE_ORIGIN}/?receipt=12`);
-  assert.equal((await mf.dispatchFetch(`${SITE_ORIGIN}/api/events`,{headers})).status,404);
+  assert.equal((await mf.dispatchFetch(`${SITE_ORIGIN}/api/events`)).status,404);
   assert.equal((await mf.dispatchFetch(`${base}/`)).status,200,'development URLs still serve the page locally');
 });
 
-test('old website redirects to the private domain while its API stays in place', async () => {
+test('old website redirects to the public domain while its API stays in place', async () => {
   const legacy = 'https://ostro.ws/honeyprinter';
   for (const method of ['GET','HEAD']) {
     for (const [path, destination] of [['','/'],['/','/'],['?receipt=12','/?receipt=12'],['/build/app.js?v=1','/build/app.js?v=1']]) {
