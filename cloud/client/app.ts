@@ -31,6 +31,7 @@ const elements = {
   'read-receipt': element('read-receipt', 'button'),
   'open-log': element('open-log', 'button'),
   'about': element('about', 'button'),
+  'open-real': element('open-real', 'button'),
 };
 const $ = <K extends keyof typeof elements>(id: K): (typeof elements)[K] => elements[id];
 const api = location.hostname === SITE_HOST ? API_ORIGIN : `${location.pathname.replace(/\/$/, '')}/api`;
@@ -38,7 +39,7 @@ const time = (ms: number) => new Date(ms).toLocaleTimeString([], {hour: '2-digit
 const date = (ms: number) => new Date(ms).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let eventCursor: number | undefined, receiptCursor: number | undefined, selectedReceipt: number | undefined;
-let drawerView: 'receipt' | 'log' | 'about' | 'activity' | undefined;
+let drawerView: 'receipt' | 'log' | 'about' | 'activity' | 'real' | undefined;
 const probeLog = new ProbeLog();
 let events: ProbeEvent[] = [], receipts: ReceiptRecord[] = [], motionPaused = reducedMotion.matches;
 let scene: ReceiptScene | undefined;
@@ -162,6 +163,13 @@ function renderDrawer() {
     $('drawer-title').textContent = 'Connection log';
     probeLog.update(events);
     if (!body.contains(probeLog.element)) body.replaceChildren(probeLog.element);
+  } else if (drawerView === 'real') {
+    $('drawer-title').textContent = 'Real honeyprinter';
+    const photo = node('img', '', 'real-printer-photo');
+    photo.src = './real-honeyprinter.jpg';
+    photo.alt = 'A black MUNBYN receipt printer on red upholstery, with a printed Honeyprinter report.';
+    photo.width = 2880; photo.height = 3840; photo.decoding = 'async';
+    body.replaceChildren(photo);
   } else {
     $('drawer-title').textContent = 'Help';
     const copy = node('div', '', 'drawer-copy');
@@ -170,7 +178,7 @@ function renderDrawer() {
   }
 }
 
-for (const [id, view] of [['read-receipt', 'receipt'], ['open-log', 'log'], ['about', 'about'], ['open-activity', 'activity']] as const) {
+for (const [id, view] of [['read-receipt', 'receipt'], ['open-log', 'log'], ['about', 'about'], ['open-activity', 'activity'], ['open-real', 'real']] as const) {
   $(id).addEventListener('click', () => { drawerView = view; renderDrawer(); $('drawer').showModal(); if (view === 'activity') void loadActivity(); });
 }
 $('close-drawer').addEventListener('click', () => $('drawer').close());
