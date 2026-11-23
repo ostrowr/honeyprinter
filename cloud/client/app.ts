@@ -163,12 +163,9 @@ function renderDrawer() {
     probeLog.update(events);
     if (!body.contains(probeLog.element)) body.replaceChildren(probeLog.element);
   } else {
-    $('drawer-title').textContent = 'A small internet appliance';
+    $('drawer-title').textContent = 'Help';
     const copy = node('div', '', 'drawer-copy');
-    copy.append(node('p', 'Honeyprinter is a tiny honeypot with a lot of open ports. It greets incoming connections, records the exchange, and turns each minute into a receipt, including a short report when the wire is quiet.'));
-    copy.append(node('span', 'The paper', 'label'), node('p', 'New receipts feed through the printer automatically. Drag the loose paper, retract to older receipts or advance with the arrows. The small LCD shows the printer’s current state, with a quiet progress bar toward the next minute report. Its status light glows steadily between reports and flickers gently as the paper moves.'));
-    copy.append(node('span', 'The real machine', 'label'), node('p', 'A Raspberry Pi will deliver the reports with traffic to a thermal printer. Quiet-minute reports appear here only.'));
-    const link = node('a', 'Made by Robbie Ostrow ↗'); link.href = '/'; copy.append(link);
+    copy.append(node('p', 'Honeyprinter is a tiny honeypot with a lot of open ports. It greets incoming connections, records the exchange, and turns each minute into a receipt'));
     body.replaceChildren(copy);
   }
 }

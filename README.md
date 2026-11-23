@@ -237,6 +237,35 @@ does not poll, install a background service, acknowledge queue messages, or enab
 minutely printing. Production Luna summaries are enabled separately by adding
 `OPENAI_API_KEY` to GitHub Actions and deploying through CI.
 
+### Live printing on this Mac
+
+`cloud/scripts/print-live.ts` polls the newest public receipt, including quiet-minute
+reports, and submits at most one job per 60 seconds to CUPS. Run it as a single
+launchd job, not alongside another physical printer consumer. It saves the last
+attempt before submitting, skips receipts older than two minutes, and waits while
+this printer has any pending jobs. Restarting or reconnecting prints fresh reports
+without replaying old ones. Failed or interrupted submissions can drop a receipt.
+This temporary Mac setup reads the public feed and does not consume the Pi queue
+or require Cloudflare credentials.
+
+The installed job is `ws.honeyprinter.print`, with a ten-second polling interval;
+the persisted cooldown enforces the printing interval. It runs while this Mac is
+awake and the user is logged in, and starts again at login. State and logs are in
+`~/Library/Application Support/Honeyprinter/`.
+
+```sh
+# Stop automatic printing:
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/ws.honeyprinter.print.plist"
+# Start it again:
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/ws.honeyprinter.print.plist"
+# Inspect its status:
+launchctl print "gui/$(id -u)/ws.honeyprinter.print"
+```
+
+The LaunchAgent uses the installed Node 24 executable and the current checkout.
+Update its paths if Node or the checkout moves. Running `print-live.ts --help`
+shows the equivalent one-poll command.
+
 ### Read the queue to stdout
 
 From the repository root, using Node 24 and your existing Wrangler login:
