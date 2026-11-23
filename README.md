@@ -254,9 +254,11 @@ awake and the user is logged in, and starts again at login. State and logs are i
 `~/Library/Application Support/Honeyprinter/`.
 
 ```sh
-# Stop automatic printing:
+# Pause automatic printing, including after the next login:
+launchctl disable "gui/$(id -u)/ws.honeyprinter.print"
 launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/ws.honeyprinter.print.plist"
-# Start it again:
+# Resume printing:
+launchctl enable "gui/$(id -u)/ws.honeyprinter.print"
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/ws.honeyprinter.print.plist"
 # Inspect its status:
 launchctl print "gui/$(id -u)/ws.honeyprinter.print"
