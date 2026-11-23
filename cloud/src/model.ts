@@ -18,7 +18,8 @@ export async function summarize(counts: Counts, env: SummaryEnvironment): Promis
     method: 'POST',
     headers: {'Authorization': `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json'},
     signal: AbortSignal.timeout(25_000),
-    redirect: 'error',
+    // Workers supports manual redirects; reject their non-OK status below.
+    redirect: 'manual',
     body: JSON.stringify({
       model: env.OPENAI_MODEL,
       store: false,

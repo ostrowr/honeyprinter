@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {build} from 'esbuild';
+import {Miniflare, convertV4MiniflareOptions} from 'miniflare';
 import {mockSummary, summarize} from '../src/model.ts';
 import {verifySummary} from '../scripts/verify-summary.ts';
 import type {Counts, Summary} from '../shared/api.ts';
@@ -20,7 +23,7 @@ test('Luna receives bounded structured output settings and separate untrusted te
     assert.equal(url, 'https://api.openai.com/v1/responses');
     assert.equal(init.method, 'POST');
     assert.equal(new Headers(init.headers).get('Authorization'), 'Bearer test-key');
-    assert.equal(init.redirect, 'error');
+    assert.equal(init.redirect, 'manual');
     assert.ok(init.signal instanceof AbortSignal);
     const request = JSON.parse(String(init.body));
     assert.equal(request.model, 'gpt-6-luna');
@@ -54,12 +57,46 @@ test('mock mode needs no key or network; invalid configuration fails before a re
 });
 
 test('API failures expose only status and do not retry within the minute attempt', async t => {
-  for (const status of [401, 403, 404, 429, 500]) {
+  for (const status of [301, 302, 307, 308, 401, 403, 404, 429, 500]) {
     const fetch = t.mock.method(globalThis, 'fetch', async () => new Response('sensitive upstream body', {status}));
     await assert.rejects(summarize(counts, env), {message: `OpenAI returned ${status}`});
     assert.equal(fetch.mock.callCount(), 1);
     fetch.mock.restore();
   }
+});
+
+test('the Workers runtime can summarize and rejects redirects without forwarding credentials', async t => {
+  const {outputFiles} = await build({stdin: {
+    contents: `import {summarize} from './src/model.ts';
+      export default {async fetch(request, env) {
+        try { return Response.json(await summarize(await request.json(), env)); }
+        catch (error) { return new Response(error.message, {status: 502}); }
+      }};`,
+    resolveDir: fileURLToPath(new URL('..', import.meta.url)), loader: 'ts',
+  }, bundle: true, write: false, format: 'esm', platform: 'neutral'});
+  let redirect = false, calls = 0;
+  const mf = new Miniflare(convertV4MiniflareOptions({modules: true,
+    script: outputFiles[0].text, compatibilityDate: '2026-10-08', bindings: env,
+    outboundService: async request => {
+      calls++;
+      assert.equal(request.url, 'https://api.openai.com/v1/responses');
+      assert.equal(request.headers.get('Authorization'), 'Bearer test-key');
+      assert.equal((await request.json() as {model: string}).model, 'gpt-6-luna');
+      return redirect ? new Response(null, {status: 302, headers: {Location: 'https://unexpected.example/'}})
+        : Response.json(completed(summary));
+    },
+  }));
+  t.after(() => mf.dispose());
+  const invoke = () => mf.dispatchFetch('https://example.com/', {method: 'POST', body: JSON.stringify(counts)});
+  const response = await invoke();
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), summary);
+  assert.equal(calls, 1);
+  redirect = true;
+  const rejected = await invoke();
+  assert.equal(rejected.status, 502);
+  assert.equal(await rejected.text(), 'OpenAI returned 302');
+  assert.equal(calls, 2, 'no request to the redirect destination');
 });
 
 test('refusals, incomplete responses, malformed JSON, and invalid receipt shapes fail', async t => {
