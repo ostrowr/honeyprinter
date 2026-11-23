@@ -1,4 +1,4 @@
-import {ReceiptScene} from './scene.ts';
+import type {ReceiptScene} from './scene.ts';
 import {SITE_HOST, API_ORIGIN} from '../shared/urls.ts';
 import {element} from './dom.ts';
 import {activityPanel} from './activity.ts';
@@ -10,7 +10,6 @@ const elements = {
   'machine-state': element('machine-state', 'span'),
   'open-activity': element('open-activity', 'button'),
   'scene-fallback': element('scene-fallback', 'div'),
-  'paper-hint': element('paper-hint', 'div'),
   'motion': element('motion', 'button'),
   'print-status': element('print-status', 'div'),
   'drawer': element('drawer', 'dialog'),
@@ -25,7 +24,6 @@ const elements = {
   'drawer-body': element('drawer-body', 'div'),
   'drawer-title': element('drawer-title', 'h2'),
   'close-drawer': element('close-drawer', 'button'),
-  'mode': element('mode', 'span'),
   'connection': element('connection', 'span'),
   'connection-dot': element('connection-dot', 'span'),
   'read-receipt': element('read-receipt', 'button'),
@@ -43,6 +41,7 @@ let drawerView: 'receipt' | 'log' | 'about' | 'activity' | 'real' | undefined;
 const probeLog = new ProbeLog();
 let events: ProbeEvent[] = [], receipts: ReceiptRecord[] = [], motionPaused = reducedMotion.matches;
 let scene: ReceiptScene | undefined;
+let reportTiming: {createdAt: number; serverTime: number; receivedAt: number} | undefined;
 const feedState: Record<keyof FeedItems, 'connecting' | 'live' | 'offline'> = {events:'connecting', receipts:'connecting'};
 let activity: Activity | undefined, activityLoading = false, activityFailed = false, activityAttempt = 0;
 
@@ -73,14 +72,24 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, class
   return element;
 }
 
-try {
-  scene = new ReceiptScene($('scene'), direction => {
-    $('machine-state').textContent = direction < 0 ? 'Retracting' : direction > 0 ? 'Printing' : motionPaused ? 'Motion paused' : 'Standing by';
-  });
-} catch {
-  $('scene-fallback').hidden = false;
-  $('paper-hint').hidden = true;
-  $('motion').disabled = true;
+async function loadScene() {
+  try {
+    const {ReceiptScene} = await import('./scene.ts');
+    scene = new ReceiptScene($('scene'), direction => {
+      $('machine-state').textContent = direction < 0 ? 'Retracting' : direction > 0 ? 'Printing' : motionPaused ? 'Motion paused' : 'Standing by';
+    });
+    scene.setPaused(motionPaused);
+    scene.setConnected(feedState.receipts === 'live');
+    // Feeds and navigation can finish before the graphics bundle. Restore the
+    // current selection without printing the already-recorded receipts again.
+    const index = receipts.findIndex(receipt => receipt.id === selectedReceipt);
+    if (index > 0) scene.showReceipt(receipts[index - 1], false);
+    if (index >= 0) scene.showReceipt(receipts[index], false);
+    if (reportTiming) scene.setReportTiming(reportTiming.createdAt, reportTiming.serverTime + Date.now() - reportTiming.receivedAt);
+  } catch {
+    $('scene-fallback').hidden = false;
+    $('motion').disabled = true;
+  }
 }
 
 function setMotion(paused: boolean) {
@@ -89,7 +98,6 @@ function setMotion(paused: boolean) {
   $('motion').replaceChildren(document.createTextNode(paused ? 'Resume motion ' : 'Pause motion '), node('span', paused ? '▷' : 'Ⅱ'));
   $('motion').setAttribute('aria-pressed', String(paused));
   $('machine-state').textContent = paused ? 'Motion paused' : 'Standing by';
-  $('paper-hint').hidden = paused || !scene;
 }
 setMotion(motionPaused);
 reducedMotion.addEventListener('change', event => setMotion(event.matches));
@@ -208,8 +216,10 @@ function receiveReceipts(page: Feed<ReceiptRecord>) {
   const firstLoad = receiptCursor === undefined;
   receipts = [...receipts, ...page.items].slice(-100); receiptCursor = page.cursor;
   const newest = receipts.at(-1);
-  if (newest) scene?.setReportTiming(newest.created_at_ms, page.server_time_ms);
-  $('mode').textContent = page.mode === 'mock' ? 'Mock summaries' : 'AI summaries';
+  if (newest) {
+    reportTiming = {createdAt: newest.created_at_ms, serverTime: page.server_time_ms, receivedAt: Date.now()};
+    scene?.setReportTiming(newest.created_at_ms, page.server_time_ms);
+  }
   if ($('drawer').open && drawerView === 'activity') void loadActivity();
   if (page.items.length && (atLatest || !currentReceipt())) {
     if (firstLoad) {
@@ -240,3 +250,6 @@ async function poll<K extends keyof FeedItems>(name: K, cursor: () => number | u
 }
 void poll('events', () => eventCursor, receiveEvents);
 void poll('receipts', () => receiptCursor, receiveReceipts);
+
+// Start data requests before downloading and initializing Three.js.
+void loadScene();

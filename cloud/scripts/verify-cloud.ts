@@ -9,7 +9,7 @@ export async function verifyCloud(token: string, expected: {SUMMARY_MODE: string
   let lastError = '';
   do {
     try {
-      for (const [path, contentType] of [['/','text/html'],['/style.css','text/css'],['/build/app.js','javascript'],['/real-honeyprinter.jpg','image/jpeg']]) {
+      for (const [path, contentType] of [['/','text/html'],['/style.css','text/css'],['/build/app.js','javascript'],['/real-honeyprinter-thumb.webp','image/webp'],['/real-honeyprinter.jpg','image/jpeg']]) {
         const response = await request(SITE_ORIGIN + path);
         if (response.status !== 200 || !response.headers.get('Content-Type')?.includes(contentType)) throw new Error(`Public website unavailable at ${path}`);
         if (response.headers.get('X-Robots-Tag')?.includes('noindex')) throw new Error('Website still marked private');
